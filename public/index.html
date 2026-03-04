@@ -3,64 +3,30 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>NetRunner - Asistente Inteligente</title>
-    <!-- Fonts & Icons -->
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <title>NetRunner Pro</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     <link rel="stylesheet" href="src/styles.css">
 </head>
 <body>
-    <div class="app-layout">
-        <!-- Cabecera -->
-        <header class="app-header">
-            <div class="brand">
-                <div class="logo-box"><i class="fa-solid fa-bolt-lightning"></i></div>
-                <h1>NetRunner <span>v4</span></h1>
-            </div>
-            <div class="status-panel">
-                <div id="bridge-status" class="status-pill offline" title="Estado de conexión con tu PC">
-                    <span class="dot"></span>
-                    <span class="label">PC Local</span>
-                </div>
-            </div>
-        </header>
+    <div class="app-container">
+        <!-- Indicador de Estado (Sutil) -->
+        <div id="connection-indicator" class="status-dot offline" title="Desconectado"></div>
 
-        <!-- Contenido Principal -->
-        <main class="chat-container">
-            <div id="chat-messages" class="messages-area">
-                <!-- Los mensajes aparecerán aquí -->
-            </div>
-
-            <!-- Área de Entrada -->
-            <footer class="input-area">
-                <div class="input-container">
-                    <form id="chat-form">
-                        <textarea id="user-input" rows="1" placeholder="¿En qué puedo ayudarte hoy?" required></textarea>
-                        <button type="submit" id="send-btn">
-                            <i class="fa-solid fa-paper-plane"></i>
-                        </button>
-                    </form>
-                </div>
-            </footer>
+        <!-- Área de Chat / Landing -->
+        <main id="chat-messages" class="messages-area">
+            <!-- Landing se renderiza aquí por JS -->
         </main>
 
-        <!-- Vista Previa Flotante -->
-        <div id="preview-modal" class="modal hidden">
-            <div class="modal-content">
-                <div class="modal-header">
-                    <h3>Vista Previa</h3>
-                    <button id="close-preview"><i class="fa-solid fa-xmark"></i></button>
-                </div>
-                <div class="modal-body">
-                    <iframe id="preview-frame" sandbox="allow-scripts allow-forms allow-same-origin"></iframe>
-                </div>
-            </div>
-        </div>
+        <!-- Área de Entrada (Oculta al inicio) -->
+        <footer class="input-area hidden">
+            <form id="chat-form">
+                <textarea id="user-input" rows="1" placeholder="Escribe tu petición..." required></textarea>
+                <button type="submit" id="send-btn" style="display:none"></button> <!-- Submit con Enter -->
+            </form>
+        </footer>
     </div>
 
-    <!-- Configuración y Lógica -->
     <script src="src/config.js"></script>
     <script type="module" src="src/app-core.js"></script>
 </body>
