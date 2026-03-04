@@ -1,211 +1,246 @@
 /**
- * app-core.js - NetRunner v4.2 (On-Demand Permissions)
+ * app-core.js - NetRunner v4.5 Master Edition
+ * Robustez Total y UI de Alta Gama
  */
+
+const DOM = {
+    chat: document.getElementById('chat-messages'),
+    form: document.getElementById('chat-form'),
+    input: document.getElementById('user-input'),
+    status: document.getElementById('status-chip')
+};
 
 const state = {
     history: [],
     dirHandle: null,
-    pendingAction: null, // Almacena la tarea mientras se pide permiso
-    ui: {
-        chatArea: document.getElementById('chat-messages'),
-        inputArea: document.querySelector('.input-area'),
-        form: document.getElementById('chat-form'),
-        input: document.getElementById('user-input')
-    }
+    isProcessing: false
 };
 
+// 1. INICIO
 window.addEventListener('DOMContentLoaded', () => {
-    initApp();
+    renderWelcome();
+    setupEventListeners();
+    checkCapabilities();
 });
 
-function initApp() {
-    state.ui.chatArea.innerHTML = '';
-    state.ui.inputArea.classList.remove('hidden');
-    appendSystemMessage("Asistente listo. ¿En qué puedo ayudarte hoy?");
-    
-    state.ui.form.onsubmit = handleSubmission;
-    
-    // Auto-resize
-    state.ui.input.oninput = () => {
-        state.ui.input.style.height = 'auto';
-        state.ui.input.style.height = state.ui.input.scrollHeight + 'px';
+function checkCapabilities() {
+    if (!('showDirectoryPicker' in window)) {
+        updateStatusUI(false, 'Incompatible');
+    }
+}
+
+function setupEventListeners() {
+    // Manejo de envío
+    DOM.form.addEventListener('submit', (e) => {
+        e.preventDefault();
+        handleSubmit();
+    });
+
+    // Tecla Enter (con soporte para Shift+Enter para saltos de línea)
+    DOM.input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            handleSubmit();
+        }
+    });
+
+    // Auto-ajuste de altura del input
+    DOM.input.addEventListener('input', () => {
+        DOM.input.style.height = 'auto';
+        DOM.input.style.height = Math.min(DOM.input.scrollHeight, 200) + 'px';
+    });
+
+    // Click en el estado para conectar PC
+    DOM.status.onclick = async () => {
+        try {
+            state.dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
+            updateStatusUI(true, 'PC Conectado');
+            appendMessage('assistant', "✅ He establecido una conexión segura con tu carpeta local. Ya puedo actuar sobre tus archivos directamente.");
+        } catch (e) {
+            updateStatusUI(false, 'Acceso Denegado');
+        }
     };
 }
 
-// --- COMUNICACIÓN ---
-async function handleSubmission(e) {
-    e.preventDefault();
-    const query = state.ui.input.value.trim();
+// 2. LOGICA DE ENVÍO
+async function handleSubmit() {
+    if (state.isProcessing) return;
+    
+    const query = DOM.input.value.trim();
     if (!query) return;
 
-    appendMessage('user', query);
-    state.ui.input.value = '';
-    state.ui.input.style.height = 'auto';
+    // Limpiar UI si es el primer mensaje
+    if (state.history.length === 0) DOM.chat.innerHTML = '';
 
-    const loadingId = showLoading();
+    appendMessage('user', query);
+    DOM.input.value = '';
+    DOM.input.style.height = 'auto';
+
+    await getAIResponse(query);
+}
+
+async function getAIResponse(query) {
+    state.isProcessing = true;
+    const loaderId = showLoader();
+
+    const systemPrompt = `Eres NetRunner Pro, un asistente de ingeniería de élite.
+    ACCIONES DISPONIBLES:
+    - Para ARCHIVOS: [FILE:nombre.ext]contenido[/FILE]
+    - Para WEBS: [URL:https://sitio.com]
+    
+    INSTRUCCIONES:
+    - Si el usuario pide crear algo y no tienes permiso (dirHandle: ${state.dirHandle ? 'SÍ' : 'NO'}), pídelo con [REQUEST_PC].
+    - Nunca des pasos de tutorial. EJECUTA.`;
 
     try {
-        const sysPrompt = `Eres NetRunner. EJECUTA TAREAS.
-        - Si necesitas archivos y NO tienes permiso (actual: ${state.dirHandle ? 'SÍ' : 'NO'}), usa: [REQUEST_PC_PERMISSION]
-        - Si necesitas abrir una web, usa: [CONFIRM_URL:https://url.com]
-        - Formato ARCHIVOS: [FILE:nombre.ext]contenido[/FILE]`;
-
         const res = await fetch('/api/chat', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                messages: [{ role: 'system', content: sysPrompt }, ...state.history.slice(-10), { role: 'user', content: query }],
+                messages: [
+                    { role: 'system', content: systemPrompt },
+                    ...state.history.slice(-10),
+                    { role: 'user', content: query }
+                ],
                 model: CONFIG.DEFAULT_MODEL
             })
         });
 
         const data = await res.json();
-        removeLoading(loadingId);
-        await processAIResponse(data.text);
+        removeLoader(loaderId);
         
-        state.history.push({ role: 'user', content: query }, { role: 'assistant', content: data.text });
+        processActions(data.text);
+        
+        state.history.push({ role: 'user', content: query });
+        state.history.push({ role: 'assistant', content: data.text });
 
     } catch (err) {
-        removeLoading(loadingId);
-        appendMessage('assistant', `❌ Error: ${err.message}`);
+        removeLoader(loaderId);
+        appendMessage('assistant', `⚠️ Error de conexión: ${err.message}`);
+    } finally {
+        state.isProcessing = false;
     }
 }
 
-// --- MOTOR DE ACCIONES ---
-async function processAIResponse(text) {
+// 3. PROCESADOR DE ACCIONES
+async function processActions(text) {
     const msgId = appendMessage('assistant', text);
     const container = document.getElementById(msgId);
 
-    // 1. ¿La IA pide permiso para el PC?
-    if (text.includes('[REQUEST_PC_PERMISSION]')) {
-        // Guardar la acción del archivo si venía en el mismo mensaje
-        const fileMatch = text.match(/\[FILE:\s*([^\]]+)\]([\s\S]*?)\[\/FILE\]/i);
-        if (fileMatch) state.pendingAction = { type: 'file', name: fileMatch[1], content: fileMatch[2] };
-        
-        renderPermissionCard(container, 'folder-open', 'Acceso al Sistema', 'Necesito permiso para gestionar archivos en tu PC.', 'Conectar Carpeta', async () => {
-            try {
-                state.dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
-                addStatusTag(container, 'check', 'Permiso concedido', 'success');
-                if (state.pendingAction) {
-                    await performFileAction(state.pendingAction.name, state.pendingAction.content, container);
-                    state.pendingAction = null;
-                }
-            } catch (e) {
-                addStatusTag(container, 'xmark', 'Permiso denegado', 'error');
-            }
-        });
-        return;
+    // Permiso PC
+    if (text.includes('[REQUEST_PC]')) {
+        renderActionCard(container, 'folder-open', 'Acceso al Sistema', 'Necesito permiso para gestionar archivos.', 'Conectar PC', () => DOM.status.click());
     }
 
-    // 2. ¿La IA quiere abrir una URL? (Requiere confirmación para evitar bloqueos)
-    const urlMatch = text.match(/\[CONFIRM_URL:\s*(.*?)\s*\]/i);
+    // URL
+    const urlMatch = text.match(/\[URL:\s*(.*?)\s*\]/);
     if (urlMatch) {
-        const url = urlMatch[1];
-        renderPermissionCard(container, 'globe', 'Abrir Enlace', `La IA quiere abrir: ${url}`, 'Abrir ahora', () => {
-            window.open(url, '_blank');
-            addStatusTag(container, 'check', 'Enlace abierto', 'success');
-        });
+        renderActionCard(container, 'globe', 'Navegador', `Solicitud para abrir: ${urlMatch[1]}`, 'Abrir Web', () => window.open(urlMatch[1], '_blank'));
     }
 
-    // 3. Ejecución directa si ya hay permiso
-    const fileMatch = text.match(/\[FILE:\s*([^\]]+)\]([\s\S]*?)\[\/FILE\]/gi);
-    if (fileMatch && state.dirHandle) {
-        // Procesar todos los archivos encontrados
-        const fileRegex = /\[FILE:\s*([^\]]+)\]([\s\S]*?)\[\/FILE\]/gi;
-        let m;
-        while ((m = fileRegex.exec(text)) !== null) {
-            await performFileAction(m[1].trim(), m[2], container);
+    // Archivos
+    const fileRegex = /\[FILE:\s*([^\]]+)\]([\s\S]*?)\[\/FILE\]/gi;
+    let match;
+    while ((match = fileRegex.exec(text)) !== null) {
+        const [_, name, content] = match;
+        if (state.dirHandle) {
+            await saveFile(name.trim(), content, container);
+        } else {
+            renderActionCard(container, 'download', 'Archivo Pendiente', `He preparado "${name}", pero necesito permiso.`, 'Descargar ahora', () => downloadFallback(name, content));
         }
-    } else if (fileMatch && !state.dirHandle) {
-        // Si hay archivos pero no permiso, y la IA olvidó pedirlo, lo forzamos
-        appendMessage('assistant', "Detecto que quieres crear un archivo pero no tengo acceso.");
-        // (Llamada recursiva simplificada o disparar el botón de permiso)
     }
 }
 
-async function performFileAction(name, content, container) {
+async function saveFile(name, content, container) {
     try {
-        const fileHandle = await state.dirHandle.getFileHandle(name, { create: true });
-        const writable = await fileHandle.createWritable();
+        const handle = await state.dirHandle.getFileHandle(name, { create: true });
+        const writable = await handle.createWritable();
         await writable.write(content);
         await writable.close();
-        addStatusTag(container, 'file-circle-check', `Archivo guardado: ${name}`, 'success');
-    } catch (err) {
-        addStatusTag(container, 'triangle-exclamation', `Error al guardar ${name}`, 'error');
+        addStatusTag(container, 'check-circle', `Archivo guardado: ${name}`, 'success');
+    } catch (e) {
+        addStatusTag(container, 'exclamation-circle', `Error al guardar: ${name}`, 'error');
     }
 }
 
-// --- UI COMPONENTS ---
-function renderPermissionCard(container, icon, title, desc, btnLabel, onConfirm) {
-    const card = document.createElement('div');
-    card.className = 'permission-card animate-slide-up';
-    card.innerHTML = `
-        <div class="perm-icon"><i class="fa-solid fa-${icon}"></i></div>
-        <div class="perm-info">
-            <h4>${title}</h4>
-            <p>${desc}</p>
-            <button class="perm-btn">${btnLabel}</button>
-        </div>
-    `;
-    const btn = card.querySelector('button');
-    btn.onclick = () => {
-        onConfirm();
-        card.style.opacity = '0.5';
-        btn.disabled = true;
-        btn.innerText = "Procesado";
-    };
-    container.appendChild(card);
-}
-
+// 4. UI ENGINE
 function appendMessage(role, text) {
     const id = `msg-${Date.now()}`;
     const div = document.createElement('div');
     div.id = id;
-    div.className = `message message-${role} animate-slide-up`;
+    div.className = `message message-${role}`;
     
-    let cleanText = text.replace(/\[FILE:.*?\][\s\S]*?\[\/FILE\]/gi, '')
-                        .replace(/\[CONFIRM_URL:.*?\]/gi, '')
-                        .replace(/\[REQUEST_PC_PERMISSION\]/gi, '')
-                        .trim();
+    const cleanText = text.replace(/\[FILE:.*?\][\s\S]*?\[\/FILE\]/gi, '')
+                          .replace(/\[URL:.*?\]/gi, '')
+                          .replace(/\[REQUEST_PC\]/gi, '')
+                          .replace(/<thinking>[\s\S]*?<\/thinking>/gi, '')
+                          .trim();
 
-    if (!cleanText && role === 'assistant') cleanText = "Analizando sistema...";
-
-    div.innerHTML = `<div class="text-content">${cleanText.replace(/\n/g, '<br>')}</div>`;
-    state.ui.chatArea.appendChild(div);
-    scrollToBottom();
+    div.innerHTML = `<div class="text-content">${cleanText.replace(/\n/g, '<br>') || 'He procesado la acción.'}</div>`;
+    DOM.chat.appendChild(div);
+    DOM.chat.scrollTop = DOM.chat.scrollHeight;
     return id;
+}
+
+function renderActionCard(container, icon, title, desc, btnLabel, onAction) {
+    const card = document.createElement('div');
+    card.className = 'action-card animate-reveal';
+    card.innerHTML = `
+        <div class="action-icon"><i class="fa-solid fa-${icon}"></i></div>
+        <div class="action-info">
+            <h4>${title}</h4>
+            <p>${desc}</p>
+            <button class="action-btn">${btnLabel}</button>
+        </div>
+    `;
+    card.querySelector('button').onclick = onAction;
+    container.appendChild(card);
 }
 
 function addStatusTag(container, icon, text, type) {
     const tag = document.createElement('div');
-    tag.className = `status-tag status-${type}`;
+    tag.style.cssText = `font-size: 0.75rem; color: var(--${type === 'success' ? 'success' : 'error'}); margin-top: 0.5rem; display: flex; align-items: center; gap: 0.5rem;`;
     tag.innerHTML = `<i class="fa-solid fa-${icon}"></i> ${text}`;
     container.appendChild(tag);
 }
 
-function appendSystemMessage(text) {
-    const div = document.createElement('div');
-    div.className = 'system-message';
-    div.innerText = text;
-    state.ui.chatArea.appendChild(div);
+function renderWelcome() {
+    DOM.chat.innerHTML = `
+        <div class="message message-assistant" style="max-width: 100%; text-align: center; padding: 4rem 0;">
+            <h2 style="font-size: 2.5rem; font-weight: 800; margin-bottom: 1rem; background: linear-gradient(to bottom, #fff, #666); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">NetRunner Pro</h2>
+            <p style="color: var(--text-dim); font-size: 1.1rem; max-width: 500px; margin: 0 auto 2rem;">Asistente autónomo de ingeniería. Capaz de gestionar archivos locales y automatizar flujos web.</p>
+            <div style="display: flex; justify-content: center; gap: 1rem;">
+                <button class="status-pill" style="padding: 0.8rem 1.5rem; font-size: 0.8rem;" onclick="document.getElementById('user-input').value='Crea una landing page moderna en un archivo index.html'; document.getElementById('chat-form').requestSubmit();">Crear Web</button>
+                <button class="status-pill" style="padding: 0.8rem 1.5rem; font-size: 0.8rem;" onclick="document.getElementById('user-input').value='Abre youtube'; document.getElementById('chat-form').requestSubmit();">Abrir App</button>
+            </div>
+        </div>
+    `;
 }
 
-function showLoading() {
+function showLoader() {
     const id = `loader-${Date.now()}`;
     const div = document.createElement('div');
     div.id = id;
-    div.className = 'message message-assistant loading';
-    div.innerHTML = '<span class="typing-dot"></span><span class="typing-dot"></span><span class="typing-dot"></span>';
-    state.ui.chatArea.appendChild(div);
-    scrollToBottom();
+    div.className = 'message message-assistant';
+    div.innerHTML = '<div class="typing-loader"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div>';
+    DOM.chat.appendChild(div);
+    DOM.chat.scrollTop = DOM.chat.scrollHeight;
     return id;
 }
 
-function removeLoading(id) {
+function removeLoader(id) {
     const el = document.getElementById(id);
     if (el) el.remove();
 }
 
-function scrollToBottom() {
-    state.ui.chatArea.scrollTop = state.ui.chatArea.scrollHeight;
+function updateStatusUI(online, label) {
+    DOM.status.className = `status-pill ${online ? 'online' : 'offline'}`;
+    DOM.status.querySelector('.status-label').textContent = label || 'PC Local';
+}
+
+function downloadFallback(name, content) {
+    const blob = new Blob([content], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = name; a.click();
 }
