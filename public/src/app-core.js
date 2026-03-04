@@ -102,10 +102,20 @@ function processActions(text) {
     if (text.includes('[REQUEST_PC]')) {
         renderCard(container, 'folder-open', 'Acceso al Disco', 'Necesito permiso para guardar archivos en tu PC.', 'Seleccionar Carpeta', async () => {
             try {
-                state.dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
+                // Forzamos la sugerencia de empezar en el escritorio para mayor éxito
+                state.dirHandle = await window.showDirectoryPicker({ 
+                    mode: 'readwrite',
+                    startIn: 'desktop' 
+                });
                 addStatus(container, 'check', 'PC Vinculado correctamente.', 'success');
             } catch (e) {
-                addStatus(container, 'circle-exclamation', 'El sistema bloqueó el acceso a esa carpeta. Elige otra.', 'error');
+                if (e.name === 'SecurityError') {
+                    addStatus(container, 'triangle-exclamation', 'Carpeta Prohibida: Por seguridad, elige una carpeta personal como "Escritorio" o "Documentos", no una del sistema (C:\\).', 'error');
+                } else if (e.name === 'AbortError') {
+                    addStatus(container, 'circle-info', 'Selección cancelada.', 'warning');
+                } else {
+                    addStatus(container, 'circle-exclamation', 'Error inesperado: ' + e.message, 'error');
+                }
             }
         });
     }
