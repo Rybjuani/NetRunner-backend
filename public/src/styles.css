@@ -124,18 +124,100 @@ body {
     border-radius: 99px;
 }
 
-/* Tags de Estado */
-.status-tag {
-    display: inline-flex;
+/* Tarjetas de Permiso (IA pidiendo acceso) */
+.permission-card {
+    background: #111;
+    border: 1px solid var(--primary);
+    padding: 1.5rem;
+    border-radius: 1rem;
+    margin-top: 1rem;
+    display: flex;
     align-items: center;
-    gap: 0.5rem;
-    padding: 0.5rem 1rem;
-    border-radius: 0.5rem;
-    background: rgba(16, 185, 129, 0.1);
-    color: var(--success);
-    border: 1px solid rgba(16, 185, 129, 0.2);
-    margin-top: 0.5rem;
+    gap: 1.5rem;
+    box-shadow: 0 10px 30px rgba(59, 130, 246, 0.15);
+}
+
+.perm-icon {
+    font-size: 2rem;
+    color: var(--primary);
+}
+
+.perm-info h4 {
+    font-size: 1rem;
+    font-weight: 700;
+    margin-bottom: 0.3rem;
+}
+
+.perm-info p {
     font-size: 0.85rem;
+    color: var(--text-dim);
+    margin-bottom: 1rem;
+}
+
+.perm-btn {
+    background: var(--primary);
+    color: white;
+    border: none;
+    padding: 0.6rem 1.2rem;
+    border-radius: 0.5rem;
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.perm-btn:hover {
+    background: #2563eb;
+    transform: translateY(-1px);
+}
+
+.perm-btn:disabled {
+    background: #27272a;
+    cursor: default;
+}
+
+/* Ajustes finales de Chat */
+.message-assistant {
+    border-left: 2px solid transparent;
+}
+
+.text-content {
+    font-size: 1rem;
+    line-height: 1.7;
+}
+
+.status-success {
+    background: rgba(16, 185, 129, 0.1);
+    color: #34d399;
+    border: 1px solid rgba(16, 185, 129, 0.2);
+}
+
+.status-warning {
+    background: rgba(245, 158, 11, 0.1);
+    color: #fbbf24;
+    border: 1px solid rgba(245, 158, 11, 0.2);
+}
+
+.status-error {
+    background: rgba(239, 68, 68, 0.1);
+    color: #f87171;
+    border: 1px solid rgba(239, 68, 68, 0.2);
+}
+
+/* Animación de Entrada Refinada */
+@keyframes slideUp {
+    from { opacity: 0; transform: translateY(15px) scale(0.98); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.animate-slide-up {
+    animation: slideUp 0.4s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+}
+
+/* Scroll sutil */
+#chat-messages {
+    scroll-behavior: smooth;
+    padding-bottom: 4rem;
 }
 
 /* Input Area */
