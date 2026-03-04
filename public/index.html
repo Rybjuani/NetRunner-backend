@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>NetRunner Pro — Autonomous Engineer</title>
+    <title>NetRunner Pro</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
@@ -11,25 +11,20 @@
     <link rel="stylesheet" href="src/styles.css">
 </head>
 <body>
-    <!-- Capas de Diseño Premium -->
     <div class="mesh-gradient"></div>
     <div class="noise-overlay"></div>
 
     <div class="app-shell">
         <header class="main-header">
             <div class="brand">
-                <div class="logo-glow"></div>
                 <i class="fa-solid fa-bolt-lightning logo-icon"></i>
-                <span class="logo-text">NETRUNNER <span class="badge">V4 PRO</span></span>
+                <span class="logo-text">NETRUNNER</span>
             </div>
-            <div id="status-chip" class="status-pill offline">
-                <span class="pulse-dot"></span>
-                <span class="status-label">PC Local</span>
-            </div>
+            <!-- Botón de estado eliminado como pediste -->
         </header>
 
         <main id="chat-messages" class="chat-viewport">
-            <!-- La IA renderizará aquí el contenido -->
+            <!-- El chat comienza aquí directamente -->
         </main>
 
         <footer class="composer">
@@ -37,18 +32,15 @@
                 <form id="chat-form">
                     <textarea 
                         id="user-input" 
-                        placeholder="Pregúntame cualquier cosa o pide una acción..." 
+                        placeholder="Escribe una orden..." 
                         rows="1"
-                        autocomplete="off"
+                        spellcheck="false"
                     ></textarea>
-                    <div class="action-buttons">
-                        <button type="submit" id="send-btn" title="Enviar mensaje">
-                            <i class="fa-solid fa-arrow-up"></i>
-                        </button>
-                    </div>
+                    <button type="submit" id="send-btn">
+                        <i class="fa-solid fa-arrow-up"></i>
+                    </button>
                 </form>
             </div>
-            <div class="footer-hint">NetRunner puede crear archivos y abrir webs directamente.</div>
         </footer>
     </div>
 
