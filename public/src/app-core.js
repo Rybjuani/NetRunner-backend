@@ -1,13 +1,14 @@
 /**
- * app-core.js - NetRunner v4.5 Master Edition
- * Robustez Total y UI de Alta Gama
+ * app-core.js - NetRunner v4.6 Elite
+ * Reparación de Interfaz y Lógica de Envío
  */
 
 const DOM = {
     chat: document.getElementById('chat-messages'),
     form: document.getElementById('chat-form'),
     input: document.getElementById('user-input'),
-    status: document.getElementById('status-chip')
+    status: document.getElementById('status-chip'),
+    sendBtn: document.getElementById('send-btn')
 };
 
 const state = {
@@ -16,203 +17,168 @@ const state = {
     isProcessing: false
 };
 
-// 1. INICIO
+// 1. INICIALIZACIÓN
 window.addEventListener('DOMContentLoaded', () => {
+    console.log("💎 NetRunner Pro v4.6 cargado");
     renderWelcome();
-    setupEventListeners();
-    checkCapabilities();
+    setupEvents();
 });
 
-function checkCapabilities() {
-    if (!('showDirectoryPicker' in window)) {
-        updateStatusUI(false, 'Incompatible');
-    }
-}
-
-function setupEventListeners() {
-    // Manejo de envío
-    DOM.form.addEventListener('submit', (e) => {
+function setupEvents() {
+    // Envío por formulario
+    DOM.form.onsubmit = (e) => {
         e.preventDefault();
-        handleSubmit();
-    });
+        handleAction();
+    };
 
-    // Tecla Enter (con soporte para Shift+Enter para saltos de línea)
-    DOM.input.addEventListener('keydown', (e) => {
+    // Envío por tecla Enter
+    DOM.input.onkeydown = (e) => {
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
-            handleSubmit();
+            handleAction();
         }
-    });
+    };
 
-    // Auto-ajuste de altura del input
-    DOM.input.addEventListener('input', () => {
-        DOM.input.style.height = 'auto';
-        DOM.input.style.height = Math.min(DOM.input.scrollHeight, 200) + 'px';
-    });
-
-    // Click en el estado para conectar PC
+    // Conexión PC
     DOM.status.onclick = async () => {
         try {
             state.dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
-            updateStatusUI(true, 'PC Conectado');
-            appendMessage('assistant', "✅ He establecido una conexión segura con tu carpeta local. Ya puedo actuar sobre tus archivos directamente.");
+            updateStatusUI(true, 'Sistema Conectado');
+            appendMessage('assistant', "✅ Acceso concedido. He vinculado tu carpeta local con mi motor de ejecución.");
         } catch (e) {
             updateStatusUI(false, 'Acceso Denegado');
         }
     };
 }
 
-// 2. LOGICA DE ENVÍO
-async function handleSubmit() {
+async function handleAction() {
     if (state.isProcessing) return;
     
-    const query = DOM.input.value.trim();
-    if (!query) return;
+    const text = DOM.input.value.trim();
+    if (!text) return;
 
-    // Limpiar UI si es el primer mensaje
+    // Limpiar bienvenida
     if (state.history.length === 0) DOM.chat.innerHTML = '';
 
-    appendMessage('user', query);
+    appendMessage('user', text);
     DOM.input.value = '';
     DOM.input.style.height = 'auto';
 
-    await getAIResponse(query);
+    await fetchAI(text);
 }
 
-async function getAIResponse(query) {
+// 2. MOTOR DE IA
+async function fetchAI(query) {
     state.isProcessing = true;
     const loaderId = showLoader();
 
-    const systemPrompt = `Eres NetRunner Pro, un asistente de ingeniería de élite.
-    ACCIONES DISPONIBLES:
-    - Para ARCHIVOS: [FILE:nombre.ext]contenido[/FILE]
-    - Para WEBS: [URL:https://sitio.com]
-    
-    INSTRUCCIONES:
-    - Si el usuario pide crear algo y no tienes permiso (dirHandle: ${state.dirHandle ? 'SÍ' : 'NO'}), pídelo con [REQUEST_PC].
-    - Nunca des pasos de tutorial. EJECUTA.`;
+    const systemPrompt = `Eres NetRunner Pro. EJECUTA directamente.
+    FORMATOS: 
+    - Archivos: [FILE:nombre.ext]contenido[/FILE]
+    - Navegador: [URL:https://sitio.com]
+    Permiso PC: ${state.dirHandle ? 'SÍ' : 'NO'}. Si necesitas permiso usa [REQUEST_PC]`;
 
     try {
         const res = await fetch('/api/chat', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                messages: [
-                    { role: 'system', content: systemPrompt },
-                    ...state.history.slice(-10),
-                    { role: 'user', content: query }
-                ],
+                messages: [{ role: 'system', content: systemPrompt }, ...state.history.slice(-10), { role: 'user', content: query }],
                 model: CONFIG.DEFAULT_MODEL
             })
         });
 
         const data = await res.json();
         removeLoader(loaderId);
+        processAIResponse(data.text);
         
-        processActions(data.text);
-        
-        state.history.push({ role: 'user', content: query });
-        state.history.push({ role: 'assistant', content: data.text });
+        state.history.push({ role: 'user', content: query }, { role: 'assistant', content: data.text });
 
     } catch (err) {
         removeLoader(loaderId);
-        appendMessage('assistant', `⚠️ Error de conexión: ${err.message}`);
+        appendMessage('assistant', `⚠️ Error: ${err.message}`);
     } finally {
         state.isProcessing = false;
     }
 }
 
-// 3. PROCESADOR DE ACCIONES
-async function processActions(text) {
+function processAIResponse(text) {
     const msgId = appendMessage('assistant', text);
     const container = document.getElementById(msgId);
 
-    // Permiso PC
+    // Acciones
     if (text.includes('[REQUEST_PC]')) {
-        renderActionCard(container, 'folder-open', 'Acceso al Sistema', 'Necesito permiso para gestionar archivos.', 'Conectar PC', () => DOM.status.click());
+        renderCard(container, 'folder-open', 'Permiso Requerido', 'Necesito acceso a tu PC.', 'Vincular Carpeta', () => DOM.status.click());
     }
 
-    // URL
     const urlMatch = text.match(/\[URL:\s*(.*?)\s*\]/);
     if (urlMatch) {
-        renderActionCard(container, 'globe', 'Navegador', `Solicitud para abrir: ${urlMatch[1]}`, 'Abrir Web', () => window.open(urlMatch[1], '_blank'));
+        renderCard(container, 'globe', 'Navegador', `Abriendo enlace...`, 'Abrir Web', () => window.open(urlMatch[1], '_blank'));
     }
 
-    // Archivos
     const fileRegex = /\[FILE:\s*([^\]]+)\]([\s\S]*?)\[\/FILE\]/gi;
-    let match;
-    while ((match = fileRegex.exec(text)) !== null) {
-        const [_, name, content] = match;
+    let m;
+    while ((m = fileRegex.exec(text)) !== null) {
+        const [_, name, content] = m;
         if (state.dirHandle) {
-            await saveFile(name.trim(), content, container);
+            saveToPC(name.trim(), content, container);
         } else {
-            renderActionCard(container, 'download', 'Archivo Pendiente', `He preparado "${name}", pero necesito permiso.`, 'Descargar ahora', () => downloadFallback(name, content));
+            renderCard(container, 'file-arrow-down', 'Archivo Listo', `He preparado "${name}".`, 'Descargar', () => download(name, content));
         }
     }
 }
 
-async function saveFile(name, content, container) {
-    try {
-        const handle = await state.dirHandle.getFileHandle(name, { create: true });
-        const writable = await handle.createWritable();
-        await writable.write(content);
-        await writable.close();
-        addStatusTag(container, 'check-circle', `Archivo guardado: ${name}`, 'success');
-    } catch (e) {
-        addStatusTag(container, 'exclamation-circle', `Error al guardar: ${name}`, 'error');
-    }
-}
-
-// 4. UI ENGINE
+// 3. UI HELPERS
 function appendMessage(role, text) {
     const id = `msg-${Date.now()}`;
     const div = document.createElement('div');
     div.id = id;
     div.className = `message message-${role}`;
     
-    const cleanText = text.replace(/\[FILE:.*?\][\s\S]*?\[\/FILE\]/gi, '')
-                          .replace(/\[URL:.*?\]/gi, '')
-                          .replace(/\[REQUEST_PC\]/gi, '')
-                          .replace(/<thinking>[\s\S]*?<\/thinking>/gi, '')
-                          .trim();
-
-    div.innerHTML = `<div class="text-content">${cleanText.replace(/\n/g, '<br>') || 'He procesado la acción.'}</div>`;
+    const clean = text.replace(/\[FILE:.*?\][\s\S]*?\[\/FILE\]/gi, '').replace(/\[URL:.*?\]/gi, '').replace(/\[REQUEST_PC\]/gi, '').trim();
+    div.innerHTML = `<div class="text-content">${clean.replace(/\n/g, '<br>') || 'Acción procesada.'}</div>`;
+    
     DOM.chat.appendChild(div);
     DOM.chat.scrollTop = DOM.chat.scrollHeight;
     return id;
 }
 
-function renderActionCard(container, icon, title, desc, btnLabel, onAction) {
+function renderCard(container, icon, title, desc, btn, action) {
     const card = document.createElement('div');
-    card.className = 'action-card animate-reveal';
+    card.className = 'action-card';
     card.innerHTML = `
         <div class="action-icon"><i class="fa-solid fa-${icon}"></i></div>
         <div class="action-info">
             <h4>${title}</h4>
             <p>${desc}</p>
-            <button class="action-btn">${btnLabel}</button>
+            <button class="action-btn">${btn}</button>
         </div>
     `;
-    card.querySelector('button').onclick = onAction;
+    card.querySelector('button').onclick = action;
     container.appendChild(card);
 }
 
-function addStatusTag(container, icon, text, type) {
-    const tag = document.createElement('div');
-    tag.style.cssText = `font-size: 0.75rem; color: var(--${type === 'success' ? 'success' : 'error'}); margin-top: 0.5rem; display: flex; align-items: center; gap: 0.5rem;`;
-    tag.innerHTML = `<i class="fa-solid fa-${icon}"></i> ${text}`;
-    container.appendChild(tag);
+async function saveToPC(name, content, container) {
+    try {
+        const handle = await state.dirHandle.getFileHandle(name, { create: true });
+        const writable = await handle.createWritable();
+        await writable.write(content);
+        await writable.close();
+        const tag = document.createElement('div');
+        tag.style.cssText = "color:var(--success); font-size:0.8rem; margin-top:0.5rem;";
+        tag.innerHTML = `<i class="fa-solid fa-check"></i> Archivo guardado: ${name}`;
+        container.appendChild(tag);
+    } catch (e) {
+        console.error(e);
+    }
 }
 
 function renderWelcome() {
     DOM.chat.innerHTML = `
-        <div class="message message-assistant" style="max-width: 100%; text-align: center; padding: 4rem 0;">
-            <h2 style="font-size: 2.5rem; font-weight: 800; margin-bottom: 1rem; background: linear-gradient(to bottom, #fff, #666); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">NetRunner Pro</h2>
-            <p style="color: var(--text-dim); font-size: 1.1rem; max-width: 500px; margin: 0 auto 2rem;">Asistente autónomo de ingeniería. Capaz de gestionar archivos locales y automatizar flujos web.</p>
-            <div style="display: flex; justify-content: center; gap: 1rem;">
-                <button class="status-pill" style="padding: 0.8rem 1.5rem; font-size: 0.8rem;" onclick="document.getElementById('user-input').value='Crea una landing page moderna en un archivo index.html'; document.getElementById('chat-form').requestSubmit();">Crear Web</button>
-                <button class="status-pill" style="padding: 0.8rem 1.5rem; font-size: 0.8rem;" onclick="document.getElementById('user-input').value='Abre youtube'; document.getElementById('chat-form').requestSubmit();">Abrir App</button>
-            </div>
+        <div style="text-align:center; padding: 5rem 1rem;">
+            <h1 style="font-size:3rem; font-weight:900; letter-spacing:-2px; margin-bottom:1rem;">NETRUNNER</h1>
+            <p style="color:var(--text-dim); font-size:1.2rem; margin-bottom:3rem;">Ingeniería Autónoma de Próxima Generación.</p>
+            <button class="status-pill" style="padding:1rem 2rem; font-size:1rem;" onclick="document.getElementById('user-input').value='Crea una web moderna de una sola página'; document.getElementById('chat-form').requestSubmit();">Empezar Proyecto</button>
         </div>
     `;
 }
@@ -222,9 +188,8 @@ function showLoader() {
     const div = document.createElement('div');
     div.id = id;
     div.className = 'message message-assistant';
-    div.innerHTML = '<div class="typing-loader"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div>';
+    div.innerHTML = '<div style="padding:1rem; opacity:0.5;">● ● ●</div>';
     DOM.chat.appendChild(div);
-    DOM.chat.scrollTop = DOM.chat.scrollHeight;
     return id;
 }
 
@@ -233,14 +198,14 @@ function removeLoader(id) {
     if (el) el.remove();
 }
 
-function updateStatusUI(online, label) {
-    DOM.status.className = `status-pill ${online ? 'online' : 'offline'}`;
-    DOM.status.querySelector('.status-label').textContent = label || 'PC Local';
+function updateStatusUI(on, label) {
+    DOM.status.className = `status-pill ${on ? 'online' : 'offline'}`;
+    DOM.status.querySelector('.status-label').textContent = label;
 }
 
-function downloadFallback(name, content) {
-    const blob = new Blob([content], { type: 'text/plain' });
-    const url = URL.createObjectURL(blob);
+function download(n, c) {
+    const b = new Blob([c], { type: 'text/plain' });
+    const u = URL.createObjectURL(b);
     const a = document.createElement('a');
-    a.href = url; a.download = name; a.click();
+    a.href = u; a.download = n; a.click();
 }
