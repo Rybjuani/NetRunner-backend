@@ -1,190 +1,150 @@
-// app-core.js - Cerebro Autónomo de NetRunner v4
-
-const DOM = {
-    chat: document.getElementById('chat-messages'),
-    form: document.getElementById('chat-form'),
-    input: document.getElementById('user-input'),
-    statusPill: document.getElementById('bridge-status'),
-    modal: document.getElementById('preview-modal'),
-    frame: document.getElementById('preview-frame'),
-    closePreview: document.getElementById('close-preview')
-};
+// app-core.js - Implementación Directa (Sin Bridge)
 
 const state = {
     history: [],
-    bridge: { connected: false, socket: null },
-    os: 'Windows' // Default
+    dirHandle: null, // Acceso directo al disco
+    ui: {
+        messages: document.getElementById('chat-messages'),
+        input: document.getElementById('user-input'),
+        form: document.getElementById('chat-form'),
+        status: document.getElementById('bridge-status')
+    }
 };
 
 // 1. INICIALIZACIÓN
 window.addEventListener('DOMContentLoaded', () => {
-    detectOS();
     renderWelcome();
-    connectBridge();
     setupEvents();
+    checkCapabilities();
 });
 
-function detectOS() {
-    const platform = navigator.platform.toLowerCase();
-    if (platform.includes('linux')) state.os = 'Linux';
-    else if (platform.includes('mac')) state.os = 'macOS';
-    console.log(`💻 Sistema detectado: ${state.os}`);
+function checkCapabilities() {
+    const isSupported = 'showDirectoryPicker' in window;
+    updateStatusUI(false, isSupported ? 'Listo para conectar' : 'Navegador no compatible');
 }
 
 function setupEvents() {
-    DOM.form.onsubmit = async (e) => {
+    state.ui.form.onsubmit = async (e) => {
         e.preventDefault();
-        const text = DOM.input.value.trim();
+        const text = state.ui.input.value.trim();
         if (!text) return;
-        if (state.history.length === 0) DOM.chat.innerHTML = '';
+        if (state.history.length === 0) state.ui.messages.innerHTML = '';
         appendMessage('user', text);
-        DOM.input.value = '';
+        state.ui.input.value = '';
         await sendMessage(text);
     };
-    DOM.closePreview.onclick = () => DOM.modal.classList.add('hidden');
+
+    // Botón de conexión directa al PC
+    state.ui.status.onclick = async () => {
+        try {
+            state.dirHandle = await window.showDirectoryPicker();
+            updateStatusUI(true, 'PC Conectado (Escritorio)');
+            appendMessage('assistant', "✅ ¡Excelente! Ya tengo acceso directo a tu carpeta. Ahora puedo crear y leer archivos allí mismo.");
+        } catch (e) {
+            console.error(e);
+            updateStatusUI(false, 'Acceso denegado');
+        }
+    };
 }
 
-// 2. CONEXIÓN AL PC (BRIDGE)
-function connectBridge() {
-    if (state.bridge.socket) return;
-    try {
-        state.bridge.socket = new WebSocket('ws://localhost:8080');
-        state.bridge.socket.onopen = () => {
-            state.bridge.connected = true;
-            updateStatusUI(true);
-        };
-        state.bridge.socket.onmessage = (msg) => {
-            if (msg.data.includes('SYSTEM_READY')) {
-                state.bridge.connected = true;
-                updateStatusUI(true);
-            }
-        };
-        state.bridge.socket.onclose = () => {
-            state.bridge.connected = false;
-            updateStatusUI(false);
-            state.bridge.socket = null;
-            setTimeout(connectBridge, 5000);
-        };
-        state.bridge.socket.onerror = () => updateStatusUI(false);
-    } catch (e) { updateStatusUI(false); }
+function updateStatusUI(online, text) {
+    const pill = state.ui.status;
+    pill.className = `status-pill ${online ? 'online' : 'offline'}`;
+    pill.querySelector('.label').textContent = text;
 }
 
-function updateStatusUI(online) {
-    state.ui.statusPill.className = `status-pill ${online ? 'online' : 'offline'}`;
-    state.ui.statusPill.querySelector('.label').textContent = online ? 'PC Conectado' : 'PC Desconectado';
-}
-
-// 3. COMUNICACIÓN CON LA IA (MODO AUTÓNOMO)
+// 2. COMUNICACIÓN Y ACCIÓN DIRECTA
 async function sendMessage(text) {
     const loadingId = showLoading();
     
-    // INSTRUCCIONES MAESTRAS PARA LA IA
-    const systemPrompt = `Eres NetRunner Pro, un ingeniero autónomo. NO DES PASOS NI INSTRUCCIONES. EJECUTA.
+    const systemPrompt = `Eres NetRunner, un asistente que ACTÚA. 
+    ${state.dirHandle ? 'TIENES ACCESO DIRECTO AL DISCO.' : 'Pide al usuario que pulse el botón PC Local para acceder al disco.'}
     
-    Tus herramientas (ÚSALAS SIEMPRE QUE TE PIDAN ALGO):
-    1. ARCHIVOS: Para crear/escribir archivos usa: <file path="RUTA">CONTENIDO</file>
-       - En Windows el escritorio suele ser: C:/Users/USUARIO/Desktop/archivo.txt (pregunta el usuario si no sabes)
-       - En Linux el escritorio es: ~/Desktop/archivo.txt
-    2. NAVEGADOR: Para abrir webs usa JSON: {"action": "open_url", "url": "https://url.com"}
+    COMANDOS QUE DEBES USAR (Escríbelos tal cual):
+    - CREAR ARCHIVO: [FILE:nombre.txt]CONTENIDO[/FILE]
+    - ABRIR WEB: [URL:https://youtube.com]
     
-    Si te piden "abre youtube y crea un archivo", responde con el JSON y el tag <file> en el mismo mensaje.`;
+    Ejemplo: Si te piden abrir youtube y crear un archivo, responde:
+    "Claro, marchando. [URL:https://youtube.com] [FILE:hola.txt]Hola Mundo[/FILE]"`;
 
     try {
-        const messages = [
-            { role: 'system', content: systemPrompt },
-            ...state.history, 
-            { role: 'user', content: text }
-        ];
-
         const response = await fetch('/api/chat', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ messages, model: CONFIG.DEFAULT_MODEL })
+            body: JSON.stringify({ 
+                messages: [{ role: 'system', content: systemPrompt }, ...state.history, { role: 'user', content: text }],
+                model: CONFIG.DEFAULT_MODEL 
+            })
         });
 
         const data = await response.json();
         removeLoading(loadingId);
         
-        // Procesar y Guardar historial
         processAIResponse(data.text);
-        state.history.push({ role: 'user', content: text });
-        state.history.push({ role: 'assistant', content: data.text });
+        state.history.push({ role: 'user', content: text }, { role: 'assistant', content: data.text });
 
     } catch (error) {
         removeLoading(loadingId);
-        appendMessage('assistant', `⚠️ Error: No pude contactar con mi cerebro. ${error.message}`);
+        appendMessage('assistant', '⚠️ Error de conexión con la IA.');
     }
 }
 
-function processAIResponse(text) {
+async function processAIResponse(text) {
     const msgId = appendMessage('assistant', text);
     const container = document.getElementById(msgId);
 
-    // Ejecutar Acción de Navegador (JSON)
-    const browserMatch = text.match(/\{"action"\s*:\s*"open_url"[\s\S]*?\}/i);
-    if (browserMatch) {
-        try {
-            const action = JSON.parse(browserMatch[0]);
-            window.open(action.url, '_blank');
-            renderActionCard(container, 'globe', 'Abriendo Navegador', action.url, 'success');
-        } catch(e) {}
+    // 1. Ejecutar Apertura de URL
+    const urlMatch = text.match(/\[URL:(.*?)\]/);
+    if (urlMatch) {
+        const url = urlMatch[1];
+        window.open(url, '_blank');
+        renderActionCard(container, 'globe', 'Navegador', `Abriendo ${url}`, 'success');
     }
 
-    // Ejecutar Acción de Archivos (Tags)
-    const fileMatch = text.match(/<file\s+path="([^"]+)">([\s\S]*?)<\/file>/i);
+    // 2. Ejecutar Creación de Archivo Directa
+    const fileMatch = text.match(/\[FILE:(.*?)\]([\s\S]*?)\[\/FILE\]/);
     if (fileMatch) {
-        const [_, path, content] = fileMatch;
-        handleFileExecution(path, content, container);
-    }
-}
-
-async function handleFileExecution(path, content, container) {
-    const cardId = renderActionCard(container, 'file-lines', 'Creando Archivo', path, 'running');
-    
-    if (window.FileSystemSimple && state.bridge.connected) {
-        const result = await window.FileSystemSimple.createFile(path, content);
-        if (result.success) {
-            updateActionCard(cardId, 'success', `¡Listo! Archivo guardado en ${path}`);
+        const [_, filename, content] = fileMatch;
+        
+        if (state.dirHandle) {
+            try {
+                const fileHandle = await state.dirHandle.getFileHandle(filename, { create: true });
+                const writable = await fileHandle.createWritable();
+                await writable.write(content);
+                await writable.close();
+                renderActionCard(container, 'file-circle-check', 'Archivo Guardado', `Creado ${filename} en tu carpeta.`, 'success');
+            } catch (e) {
+                renderActionCard(container, 'circle-exclamation', 'Error de Disco', e.message, 'error');
+            }
         } else {
-            updateActionCard(cardId, 'error', `Fallo: ${result.message}`);
+            renderActionCard(container, 'lock', 'Acceso Denegado', 'Pulsa el botón "PC Local" arriba para darme permiso.', 'error');
         }
-    } else {
-        // Fallback: Descarga si no hay bridge
-        const blob = new Blob([content], { type: 'text/plain' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url; a.download = path.split('/').pop();
-        a.click();
-        updateActionCard(cardId, 'success', 'Bridge no activo: Descargado en el navegador.');
     }
 }
 
-// 4. UI HELPERS
+// 3. UI HELPERS
 function appendMessage(role, text) {
     const id = `msg-${Date.now()}`;
     const div = document.createElement('div');
     div.id = id;
     div.className = `message message-${role} animate-slide-up`;
     
-    // Limpiar tags del texto visible
-    let cleanText = text.replace(/<thinking>[\s\S]*?<\/thinking>/g, '')
-                        .replace(/<file[\s\S]*?<\/file>/g, '')
-                        .replace(/\{"action"[\s\S]*?\}/g, '')
+    // Limpiar comandos del texto visible para el usuario
+    let cleanText = text.replace(/\[FILE:.*?\][\s\S]*?\[\/FILE\]/g, '')
+                        .replace(/\[URL:.*?\]/g, '')
                         .trim();
     
-    if (!cleanText && role === 'assistant') cleanText = "Hecho. He ejecutado las acciones solicitadas.";
+    if (!cleanText && role === 'assistant') cleanText = "¡Hecho! He procesado tu solicitud.";
 
     div.innerHTML = cleanText.replace(/\n/g, '<br>');
-    DOM.chat.appendChild(div);
-    DOM.chat.scrollTop = DOM.chat.scrollHeight;
+    state.ui.messages.appendChild(div);
+    state.ui.messages.scrollTop = state.ui.messages.scrollHeight;
     return id;
 }
 
 function renderActionCard(container, icon, title, details, status) {
-    const id = `card-${Date.now()}`;
     const card = document.createElement('div');
-    card.id = id;
-    card.className = `action-card status-${status}`;
+    card.className = `action-card status-${status} animate-slide-up`;
     card.innerHTML = `
         <div class="action-icon"><i class="fa-solid fa-${icon}"></i></div>
         <div class="action-info">
@@ -193,16 +153,6 @@ function renderActionCard(container, icon, title, details, status) {
         </div>
     `;
     container.appendChild(card);
-    return id;
-}
-
-function updateActionCard(id, status, details) {
-    const card = document.getElementById(id);
-    if (card) {
-        card.className = `action-card status-${status}`;
-        card.querySelector('p').textContent = details;
-        if (status === 'success') card.querySelector('.action-icon').innerHTML = '<i class="fa-solid fa-check"></i>';
-    }
 }
 
 function showLoading() {
@@ -210,8 +160,8 @@ function showLoading() {
     const div = document.createElement('div');
     div.id = id;
     div.className = 'message message-assistant loading';
-    div.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> Procesando...';
-    DOM.chat.appendChild(div);
+    div.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> Trabajando...';
+    state.ui.messages.appendChild(div);
     return id;
 }
 
@@ -221,14 +171,14 @@ function removeLoading(id) {
 }
 
 function renderWelcome() {
-    DOM.chat.innerHTML = `
+    state.ui.messages.innerHTML = `
         <div class="welcome-screen">
-            <h1>Hola, soy NetRunner</h1>
-            <p>Pídeme cualquier cosa. Puedo crear archivos en tu PC y abrir webs.</p>
+            <h2>Hola, soy NetRunner</h2>
+            <p>Para empezar, haz clic en el botón <b>"PC Local"</b> de arriba para elegir dónde quieres que trabaje.</p>
             <div class="recipe-grid">
-                <button onclick="document.getElementById('user-input').value='Abre youtube y crea un saludo.txt en mi escritorio'; document.getElementById('chat-form').requestSubmit();" class="recipe-btn">
-                    <i class="fa-solid fa-magic"></i>
-                    <h4>Prueba de Superpoderes</h4>
+                <button onclick="document.getElementById('user-input').value='Abre youtube y crea un saludo.txt'; document.getElementById('chat-form').requestSubmit();" class="recipe-btn">
+                    <i class="fa-solid fa-bolt"></i>
+                    <h4>Acción Directa</h4>
                 </button>
             </div>
         </div>
