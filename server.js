@@ -1,4 +1,5 @@
 // server.js - NetRunner v6.0 (Backblaze B2 Integration)
+import 'dotenv/config';
 import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -32,7 +33,7 @@ if (B2_ENDPOINT && B2_ACCESS_KEY_ID && B2_SECRET_ACCESS_KEY && B2_BUCKET) {
         },
         forcePathStyle: true
     });
-    console.log('☁️ B2 Client configurado. Bucket:', process.env.B2_BUCKET_NAME);
+    console.log('☁️ B2 Bucket configurado:', B2_BUCKET);
 } else {
     console.warn("⚠️ B2 no configurado. Los archivos se guardarán solo localmente.");
 }
