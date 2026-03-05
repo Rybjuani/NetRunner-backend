@@ -62,6 +62,24 @@ body {
 .logo-icon { font-size: 1.25rem; color: var(--primary); }
 .logo-text { font-size: 1rem; font-weight: 700; letter-spacing: 1px; }
 
+/* Selector de Modelos */
+.model-picker select {
+    background: var(--bg-surface);
+    color: var(--text-dim);
+    border: 1px solid var(--border);
+    padding: 0.4rem 0.8rem;
+    border-radius: 8px;
+    font-size: 0.75rem;
+    outline: none;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.model-picker select:hover {
+    border-color: rgba(255,255,255,0.2);
+    color: var(--text-main);
+}
+
 /* --- CHAT VIEWPORT --- */
 .chat-viewport {
     flex: 1;

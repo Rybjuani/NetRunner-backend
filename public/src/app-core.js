@@ -6,19 +6,37 @@
 const DOM = {
     chat: document.getElementById('chat-messages'),
     form: document.getElementById('chat-form'),
-    input: document.getElementById('user-input')
+    input: document.getElementById('user-input'),
+    modelSelect: document.getElementById('model-select')
 };
 
 const state = {
     history: [],
     dirHandle: null,
-    isProcessing: false
+    isProcessing: false,
+    currentModel: CONFIG.DEFAULT_MODEL
 };
 
 window.addEventListener('DOMContentLoaded', () => {
+    populateModels();
     appendSystemMessage("Protocolo NetRunner activo. ¿Qué deseas ejecutar?");
     setupEvents();
 });
+
+function populateModels() {
+    if (!DOM.modelSelect) return;
+    CONFIG.MODELS.forEach(model => {
+        const option = document.createElement('option');
+        option.value = model.id;
+        option.textContent = model.label;
+        DOM.modelSelect.appendChild(option);
+    });
+    DOM.modelSelect.value = state.currentModel;
+    DOM.modelSelect.onchange = (e) => {
+        state.currentModel = e.target.value;
+        console.log(`Modelo cambiado a: ${state.currentModel}`);
+    };
+}
 
 function setupEvents() {
     DOM.form.onsubmit = (e) => { e.preventDefault(); handleSubmit(); };
@@ -46,7 +64,7 @@ async function fetchAI(query) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 messages: [...state.history.slice(-10), { role: 'user', content: query }],
-                model: CONFIG.DEFAULT_MODEL
+                model: state.currentModel
             })
         });
 
