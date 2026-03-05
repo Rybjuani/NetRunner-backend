@@ -144,6 +144,55 @@ app.get('/api/check-file', async (req, res) => {
     }
 });
 
+app.post('/api/chat', async (req, res) => {
+    const { messages, model } = req.body;
+    let apiKey, apiUrl;
+
+    // Determine which AI model to use
+    if (model.includes('opencodezen')) {
+        apiKey = process.env.OPENCODE_ZEN_API_KEY;
+        apiUrl = 'https://api.opencodezen.com/v1/chat/completions'; // Placeholder for OpenCodeZen API
+    } else if (model.includes('groq')) {
+        apiKey = process.env.GROQ_API_KEY;
+        apiUrl = 'https://api.groq.com/openai/v1/chat/completions'; // Placeholder for Groq API
+    } else {
+        return res.status(400).json({ error: 'Unsupported AI model' });
+    }
+
+    if (!apiKey) {
+        return res.status(500).json({ error: `API key for ${model} not configured.` });
+    }
+
+    try {
+        const fetch = (await import('node-fetch')).default; // Dynamically import node-fetch
+        const aiResponse = await fetch(apiUrl, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${apiKey}`
+            },
+            body: JSON.stringify({
+                model: model,
+                messages: messages,
+                temperature: 0.7 // Example parameter
+            })
+        });
+
+        const aiData = await aiResponse.json();
+
+        if (!aiResponse.ok) {
+            console.error(`AI API error (${model}):`, aiData);
+            return res.status(aiResponse.status).json({ error: aiData.error?.message || 'Error from AI API' });
+        }
+
+        res.json({ text: aiData.choices[0]?.message?.content || '' });
+
+    } catch (error) {
+        console.error('Error proxying AI request:', error);
+        res.status(500).json({ error: 'Failed to communicate with AI API' });
+    }
+});
+
 // File upload endpoint
 app.post('/api/upload', upload.single('file'), async (req, res) => {
     if (!req.file) {
