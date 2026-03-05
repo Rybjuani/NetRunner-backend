@@ -39,6 +39,7 @@ Thumbs.db
 
 # Build outputs
 dist/
+net_sync
 
 # WebContainer/Monaco cache
 .webcontainer-cache/
