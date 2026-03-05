@@ -80,8 +80,7 @@ def local_log(message):
     """Escribe en el log local."""
     try:
         with open(LOG_FILE, 'a') as f:
-            f.write(f"[{time.ctime()}] {message}
-")
+            f.write(f"[{time.ctime()}] {message}\n")
     except Exception as e:
         print(f"Log file error: {e}")
 
