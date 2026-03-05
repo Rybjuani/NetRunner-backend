@@ -14,7 +14,8 @@ const PORT = process.env.PORT || 3000;
 const MONGO_URL = process.env.MONGO_URL; // External MongoDB URL for Mongoose
 const B2_APPLICATION_KEY_ID = process.env.B2_APPLICATION_KEY_ID;
 const B2_APPLICATION_KEY = process.env.B2_APPLICATION_KEY;
-const B2_BUCKET_NAME = process.env.B2_BUCKET_NAME; // Expecting "KaliRyb" or similar from .env
+const B2_BUCKET_NAME = process.env.B2_BUCKET_NAME; // "KaliRyb" from .env
+const B2_BUCKET_ID = process.env.B2_BUCKET_ID;
 
 // --- Initialize Express App and HTTP Server ---
 const app = express();
@@ -176,18 +177,17 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
 
         logToMongo('info', `Attempting to upload file to B2: ${originalname}`, { file: originalname, agentId });
 
-        const fileInfo = await b2.getUploadUrl({ bucketName: B2_BUCKET_NAME });
-        const uploadUrl = fileInfo.data.uploadUrl;
-        const authToken = fileInfo.data.authorizationToken;
+	const fileInfo = await b2.getUploadUrl({ bucketId: B2_BUCKET_ID }); 
+	const uploadUrl = fileInfo.data.uploadUrl;
+	const authToken = fileInfo.data.authorizationToken;
 
-        const b2UploadResult = await b2.uploadFile({
-            uploadUrl: uploadUrl,
-            uploadAuthToken: authToken,
-            bucketName: B2_BUCKET_NAME,
-            fileName: `${agentId}/${Date.now()}-${originalname}`,
-            data: buffer,
-            mime: mimetype
-        });
+	const b2UploadResult = await b2.uploadFile({
+	    uploadUrl: uploadUrl,
+	    uploadAuthToken: authToken,
+	    fileName: `${agentId}/${Date.now()}-${originalname}`, // bucketName ya no es necesario aquí
+	    data: buffer,
+	    mime: mimetype
+});
 
         const cloudPath = b2UploadResult.data.fileName;
         logToMongo('info', `File uploaded successfully to B2: ${cloudPath}`, { file: originalname, agentId, cloudPath });
