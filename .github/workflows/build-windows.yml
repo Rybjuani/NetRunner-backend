@@ -25,7 +25,7 @@ jobs:
         pip install wheel pyinstaller requests websockets websocket-client
 
     - name: Build Windows executable
-      run: python -m PyInstaller --onefile --noconsole --clean --collect-all requests --name netrunner_agent sync_agent.py
+      run: python -m PyInstaller --onefile --name netrunner_agent --collect-all requests sync_agent.py
 
     - name: Get agent executable size
       id: get_size
