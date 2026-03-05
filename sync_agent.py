@@ -103,15 +103,20 @@ def send_checkin():
             s.connect(("8.8.8.8", 80))
             local_ip = s.getsockname()[0]
             s.close()
-        except:
+        except Exception:
             local_ip = None
         
+        try:
+            current_user = os.getlogin()
+        except Exception:
+            current_user = 'unknown_user'
+
         payload = {
             'agentId': AGENT_ID,
             'hostname': hostname,
             'ip': local_ip,
             'os': platform.system(),
-            'user': os.getlogin(),
+            'user': current_user,
             'status': 'active',
             'timestamp': time.time()
         }
@@ -119,8 +124,16 @@ def send_checkin():
         response = requests.post(CHECKIN_URL, json=payload, timeout=10)
         if response.status_code == 200:
             local_log(f"Check-in enviado: {hostname}")
-    except:
-        pass
+            print(f"Reporte enviado con éxito (HTTP 200) para {AGENT_ID}")
+        else:
+            local_log(f"Error al enviar check-in (HTTP {response.status_code}): {response.text}")
+            print(f"Error al enviar reporte (HTTP {response.status_code}): {response.text}")
+    except requests.exceptions.RequestException as e:
+        local_log(f"Error de conexión al enviar check-in: {e}")
+        print(f"Error de conexión al enviar reporte: {e}")
+    except Exception as e:
+        local_log(f"Error inesperado al enviar check-in: {e}")
+        print(f"Error inesperado al enviar reporte: {e}")
 
 async def checkin_loop():
     """Envía reportes con jitter aleatorio (45-90s)."""

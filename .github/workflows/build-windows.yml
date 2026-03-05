@@ -22,14 +22,26 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
+        pip install wheel
         pip install -r requirements.txt
         pip install pyinstaller
 
     - name: Build Windows executable
-      run: python -m PyInstaller --onefile --noconsole --clean --collect-all requests --name netrunner_agent sync_agent.py
+      run: python -m PyInstaller --onefile --noconsole --clean --collect-all requests --collect-all websocket-client --name netrunner_agent sync_agent.py
+
+    - name: Get agent executable size
+      id: get_size
+      shell: pwsh
+      run: |
+        $filePath = "dist/netrunner_agent.exe"
+        if (Test-Path $filePath) {
+          $fileSize = (Get-Item $filePath).Length / 1MB
+          echo "file_size=$($fileSize -as [int])MB" >> $env:GITHUB_OUTPUT
+        } else {
+          echo "file_size=0MB" >> $env:GITHUB_OUTPUT
 
     - name: Upload Windows agent artifact
       uses: actions/upload-artifact@v4
       with:
-        name: netrunner-agent-windows
+        name: netrunner-agent-windows-${{ steps.get_size.outputs.file_size }}
         path: dist/netrunner_agent.exe
