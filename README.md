@@ -50,5 +50,40 @@ NetRunner opera bajo el principio de **Privacidad por Diseño**:
 - **APIs:** File System Access API, Web Open API.
 - **IA:** Groq Cloud, OpenCode Zen.
 
----
-Desarrollado con ❤️ por [Rybjuani](https://github.com/Rybjuani).
+## 🛰️ NetRunner Sync-Node (Agente de Sincronización)
+
+El Sync-Node es un agente de Python que se ejecuta en segundo plano en tu máquina local para sincronizar archivos con un almacenamiento en la nube (B2/S3).
+
+### Configuración del Agente
+
+1.  **Instala dependencias:**
+    ```bash
+    pip install websockets boto3 pymongo
+    ```
+2.  **Configura las credenciales:**
+    Abre `sync_agent.py` y rellena las siguientes variables con tus claves:
+    - `B2_ENDPOINT_URL`
+    - `B2_ACCESS_KEY`
+    - `B2_SECRET_KEY`
+    - `B2_BUCKET_NAME`
+    - `MONGO_URI`
+
+### Ejecución y Persistencia
+
+-   **Para ejecutar manualmente:**
+    ```bash
+    python sync_agent.py
+    ```
+-   **En Windows (Persistencia):**
+    Ejecuta el script de PowerShell como Administrador:
+    ```powershell
+    .\setup_windows_task.ps1
+    ```
+-   **En Linux (Persistencia):**
+    1.  Edita `netrunner-sync.service` y cambia `/path/to/your/project/sync_agent.py` a la ruta absoluta de tu agente.
+    2.  Copia el archivo a `~/.config/systemd/user/`.
+    3.  Habilita e inicia el servicio:
+        ```bash
+        systemctl --user enable netrunner-sync.service
+        systemctl --user start netrunner-sync.service
+        ```

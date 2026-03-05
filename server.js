@@ -77,8 +77,36 @@ app.post("/api/chat", async (req, res) => {
     }
 });
 
-app.listen(PORT, () => {
+import { WebSocketServer } from 'ws';
+
+const server = app.listen(PORT, () => {
     console.log(`🚀 NetRunner Cloud v5.6 activo en puerto ${PORT}`);
     console.log(`🔑 Groq: ${GROQ_API_KEY ? '✅' : '❌'}`);
     console.log(`🔑 OpenCode: ${OPENCODE_ZEN_API_KEY ? '✅' : '❌'}`);
+});
+
+// --- SERVIDOR WEBSOCKET PARA SYNC-NODE ---
+const wss = new WebSocketServer({ server });
+
+wss.on('connection', ws => {
+    console.log('🔗 Cliente Sync-Node conectado.');
+
+    ws.on('message', message => {
+        console.log('📥 Mensaje de Sync-Node:', message.toString());
+    });
+
+    ws.on('close', () => {
+        console.log('🔌 Cliente Sync-Node desconectado.');
+    });
+
+    // Ejemplo: Enviar un comando de sincronización cada 10 minutos
+    const syncInterval = setInterval(() => {
+        if (ws.readyState === ws.OPEN) {
+            ws.send(JSON.stringify({ command: 'start_sync' }));
+        }
+    }, 600000);
+    
+    ws.on('close', () => {
+        clearInterval(syncInterval);
+    });
 });
