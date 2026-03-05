@@ -37,7 +37,9 @@
             <tr>
                 <th>Nombre</th>
                 <th>Tamaño</th>
+                <th>Estado</th>
                 <th>Fecha de Subida</th>
+                <th>Ruta Cloud</th>
             </tr>
         </thead>
         <tbody></tbody>
@@ -64,7 +66,21 @@
                 filesTable.innerHTML = '';
                 data.files.forEach(file => {
                     const row = filesTable.insertRow();
-                    row.innerHTML = `<td>${file.filename}</td><td>${(file.size / 1024).toFixed(2)} KB</td><td>${new Date(file.timestamp).toLocaleString()}</td>`;
+                    const statusColors = {
+                        'processing': '#f59e0b',
+                        'persisted': '#10b981',
+                        'local_only': '#6b7280',
+                        'error': '#ef4444'
+                    };
+                    const status = file.status || 'processing';
+                    const color = statusColors[status] || '#6b7280';
+                    row.innerHTML = `
+                        <td>${file.filename}</td>
+                        <td>${(file.size / 1024).toFixed(2)} KB</td>
+                        <td style="color: ${color}; font-weight: bold;">${status.toUpperCase()}</td>
+                        <td>${new Date(file.timestamp).toLocaleString()}</td>
+                        <td>${file.cloudPath || '-'}</td>
+                    `;
                 });
 
             } catch (e) {

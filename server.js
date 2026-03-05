@@ -1,4 +1,4 @@
-// server.js - NetRunner v5.8 (Dashboard Edition)
+// server.js - NetRunner v6.0 (Backblaze B2 Integration)
 import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -6,11 +6,36 @@ import { WebSocketServer } from 'ws';
 import { MongoClient } from 'mongodb';
 import fs from 'fs';
 import os from 'os';
+import { S3Client } from '@aws-sdk/client-s3';
+import { Upload } from '@aws-sdk/lib-storage';
 
 // --- CONFIGURACIÓN ---
 const PORT = process.env.PORT || 3000;
 const MONGO_URI = process.env.MONGO_URI || "mongodb+srv://ffasito:Reputo11.@rybjuani.ewuurhu.mongodb.net/?appName=rybjuani";
 const UPLOAD_DIR = path.join(os.tmpdir(), 'netrunner-uploads');
+
+// --- B2 CONFIGURATION ---
+const B2_ENDPOINT = process.env.B2_ENDPOINT;
+const B2_REGION = B2_ENDPOINT ? B2_ENDPOINT.match(/s3\.(.*?)\./)?.[1] || 'us-east-005' : 'us-east-005';
+const B2_BUCKET = process.env.B2_BUCKET_NAME;
+const B2_ACCESS_KEY_ID = process.env.B2_ACCESS_KEY_ID;
+const B2_SECRET_ACCESS_KEY = process.env.B2_SECRET_ACCESS_KEY;
+
+let s3Client = null;
+if (B2_ENDPOINT && B2_ACCESS_KEY_ID && B2_SECRET_ACCESS_KEY && B2_BUCKET) {
+    s3Client = new S3Client({
+        endpoint: B2_ENDPOINT,
+        region: B2_REGION,
+        credentials: {
+            accessKeyId: B2_ACCESS_KEY_ID,
+            secretAccessKey: B2_SECRET_ACCESS_KEY
+        },
+        forcePathStyle: true
+    });
+    console.log(`☁️ B2 Client configurado. Bucket: ${B2_BUCKET}`);
+} else {
+    console.warn("⚠️ B2 no configurado. Los archivos se guardarán solo localmente.");
+}
 
 // --- INICIALIZACIÓN ---
 const app = express();
@@ -60,7 +85,6 @@ app.post('/api/force-sync', (req, res) => {
     res.status(200).send({ message: 'Comando enviado' });
 });
 
-
 const server = app.listen(PORT, () => {
     console.log(`🚀 Servidor NetRunner activo en http://localhost:${PORT}/dashboard`);
     connectMongo();
@@ -79,8 +103,23 @@ wss.on('connection', (ws, req) => {
 
     ws.on('pong', () => { ws.isAlive = true; ws.lastSeen = Date.now(); });
 
-    ws.on('message', (message) => {
-        // ... (código existente)
+    ws.on('message', async (message, isBinary) => {
+        if (isBinary) {
+            handleBinaryChunk(ws, message);
+            return;
+        }
+
+        try {
+            const data = JSON.parse(message.toString());
+            
+            if (data.type === 'file_chunk') {
+                handleFileChunkMetadata(ws, data);
+            } else if (data.type === 'heartbeat') {
+                ws.isAlive = true;
+            }
+        } catch (e) {
+            console.error("Error parseando mensaje:", e);
+        }
     });
 
     ws.on('close', () => {
@@ -88,34 +127,188 @@ wss.on('connection', (ws, req) => {
     });
 });
 
-function handleFileChunk(ws, data) {
-    const { filename, chunk_index, is_last } = data;
+function handleFileChunkMetadata(ws, data) {
+    const { filename, chunk_index, is_last, size } = data;
     
     if (chunk_index === 0) {
-        const filePath = path.join(UPLOAD_DIR, `${Date.now()}-${filename}`);
-        ws.currentAssembler = { filename, filePath, size: 0 };
+        const filePath = path.join(UPLOAD_DIR, `${ws.id}-${Date.now()}-${filename}`);
+        ws.currentAssembler = { 
+            filename, 
+            filePath, 
+            size: 0,
+            agentId: ws.id,
+            expectedSize: size 
+        };
     }
 
-    // El buffer binario llega después
-    // ...
+    if (ws.currentAssembler) {
+        ws.currentAssembler.size += data.chunkSize || 0;
+    }
 
     if (is_last) {
         const assembler = ws.currentAssembler;
         if (assembler) {
-            logToMongo('info', 'Archivo recibido', { filename: assembler.filename, size: assembler.size });
-            filesCollection.insertOne({
-                filename: assembler.filename,
-                size: assembler.size,
-                timestamp: new Date()
-            });
+            finalizeUpload(ws, assembler);
             ws.currentAssembler = null;
         }
     }
 }
 
+function handleBinaryChunk(ws, buffer) {
+    if (!ws.currentAssembler || !ws.currentAssembler.filePath) return;
+    
+    const chunkBuffer = Buffer.from(buffer);
+    fs.appendFileSync(ws.currentAssembler.filePath, chunkBuffer);
+}
+
+async function finalizeUpload(ws, assembler) {
+    const { filename, filePath, agentId, expectedSize } = assembler;
+    
+    // Insertar documento inicial en MongoDB
+    const fileDoc = {
+        filename,
+        size: expectedSize,
+        agentId,
+        timestamp: new Date(),
+        status: 'processing',
+        cloudPath: null
+    };
+    
+    if (filesCollection) {
+        await filesCollection.insertOne(fileDoc).catch(e => console.error("Error insertando:", e));
+    }
+    logToMongo('info', 'Archivo recibido, subiendo a B2...', { filename, size: expectedSize, agentId });
+
+    // Subir a B2 si está configurado
+    if (s3Client && B2_BUCKET) {
+        let retries = 3;
+        let uploaded = false;
+        
+        while (retries > 0 && !uploaded) {
+            try {
+                const fileContent = fs.readFileSync(filePath);
+                const key = `uploads/${agentId}/${Date.now()}-${filename}`;
+                
+                const upload = new Upload({
+                    client: s3Client,
+                    params: {
+                        Bucket: B2_BUCKET,
+                        Key: key,
+                        Body: fileContent,
+                        ContentType: getContentType(filename)
+                    },
+                    queueSize: 1
+                });
+
+                await upload.done();
+                
+                // Actualizar estado en MongoDB
+                await filesCollection.updateOne(
+                    { filename, agentId, timestamp: fileDoc.timestamp },
+                    { 
+                        $set: { 
+                            status: 'persisted',
+                            cloudPath: key,
+                            persistedAt: new Date()
+                        }
+                    }
+                );
+
+                logToMongo('info', 'Archivo subido a B2', { filename, key, bucket: B2_BUCKET });
+                uploaded = true;
+                
+            } catch (b2Error) {
+                retries--;
+                console.error(`❌ Error subiendo a B2 (intentos restantes: ${retries}):`, b2Error.message);
+                if (retries > 0) await new Promise(r => setTimeout(r, 2000));
+            }
+        }
+        
+        if (!uploaded) {
+            await filesCollection.updateOne(
+                { filename, agentId, timestamp: fileDoc.timestamp },
+                { $set: { status: 'error', error: 'Falló después de 3 intentos' } }
+            );
+        }
+    } else {
+        // Sin B2 configurado
+        await filesCollection.updateOne(
+            { filename, agentId, timestamp: fileDoc.timestamp },
+            { $set: { status: 'local_only' } }
+        );
+        logToMongo('warn', 'B2 no configurado, archivo guardado localmente', { filename, filePath });
+    }
+
+    // Eliminar archivo temporal
+    try {
+        if (fs.existsSync(filePath)) {
+            fs.unlinkSync(filePath);
+            console.log(`🗑️ Archivo temporal eliminado: ${filePath}`);
+        }
+    } catch (e) {
+        console.error("Error eliminando archivo temporal:", e);
+    }
+}
+
+function getContentType(filename) {
+    const ext = path.extname(filename).toLowerCase();
+    const types = {
+        '.pdf': 'application/pdf',
+        '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        '.jpg': 'image/jpeg',
+        '.jpeg': 'image/jpeg',
+        '.png': 'image/png',
+        '.json': 'application/json',
+        '.xml': 'application/xml',
+        '.log': 'text/plain'
+    };
+    return types[ext] || 'application/octet-stream';
+}
 
 // --- HEARTBEAT CHECK ---
-// ... (código existente)
+const heartbeatInterval = setInterval(() => {
+    wss.clients.forEach(ws => {
+        if (!ws.isAlive) {
+            return ws.terminate();
+        }
+        ws.isAlive = false;
+        ws.ping();
+    });
+}, 30000);
+
+// --- CLEANUP DE ARCHIVOS HUÉRFANOS ---
+setInterval(async () => {
+    try {
+        const files = fs.readdirSync(UPLOAD_DIR);
+        const now = Date.now();
+        const MAX_AGE = 30 * 60 * 1000; // 30 minutos
+
+        for (const file of files) {
+            const filePath = path.join(UPLOAD_DIR, file);
+            const stats = fs.statSync(filePath);
+            if (now - stats.mtimeMs > MAX_AGE) {
+                fs.unlinkSync(filePath);
+                console.log(`🧹 Cleanup archivo huérfano: ${file}`);
+            }
+        }
+
+        // Limpiar documentos 'processing' viejos (>1 hora)
+        if (filesCollection) {
+            const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+            const result = await filesCollection.updateMany(
+                { status: 'processing', timestamp: { $lt: oneHourAgo } },
+                { $set: { status: 'error', error: 'Timeout - agente desconectado' } }
+            );
+            if (result.modifiedCount > 0) {
+                console.log(`🧹 Limpiados ${result.modifiedCount} documentos huérfanos`);
+            }
+        }
+    } catch (e) {
+        console.error("Error en cleanup:", e);
+    }
+}, 15 * 60 * 1000); // Cada 15 minutos
+
+wss.on('close', () => clearInterval(heartbeatInterval));
 
 function logToMongo(level, message, metadata = {}) {
     if (logCollection) {
