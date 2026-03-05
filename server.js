@@ -134,6 +134,16 @@ app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
+app.get('/api/check-file', async (req, res) => {
+    const { agentId, filename } = req.query;
+    try {
+        const existing = await FileEntry.findOne({ agentId, filename, status: 'persisted' });
+        res.json({ exists: !!existing });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // File upload endpoint
 app.post('/api/upload', upload.single('file'), async (req, res) => {
     if (!req.file) {
