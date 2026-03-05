@@ -1,0 +1,51 @@
+name: Build Windows Agent
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'sync_agent.py'
+      - 'requirements.txt'
+      - '.github/workflows/windows_build.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          
+      - name: Build with PyInstaller
+        run: |
+          pyinstaller --onefile --noconsole --name netrunner_agent sync_agent.py
+          
+      - name: Verify executable
+        run: |
+          Get-ChildItem -Path dist -Filter "*.exe" | Select-Object Name, Length, LastWriteTime
+          
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: netrunner_agent
+          path: dist/netrunner_agent.exe
+          retention-days: 30
+          
+      - name: Upload to release (if tag)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v1
+        with:
+          files: dist/netrunner_agent.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
