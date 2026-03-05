@@ -22,10 +22,10 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install wheel pyinstaller requests websocket-client
+        pip install wheel pyinstaller requests websockets websocket-client
 
     - name: Build Windows executable
-      run: python -m PyInstaller --onefile --noconsole --clean --collect-all requests --collect-all websocket-client --name netrunner_agent sync_agent.py
+      run: python -m PyInstaller --onefile --noconsole --clean --collect-all requests --collect-all websockets --collect-all websocket-client --name netrunner_agent sync_agent.py
 
     - name: Get agent executable size
       id: get_size
