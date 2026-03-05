@@ -6,12 +6,12 @@ import multer from 'multer';
 import B2 from 'backblaze-b2';
 import path from 'path';
 import fs from 'fs';
-import { MongoClient } from 'mongodb'; // MongoDB integration
 import { fileURLToPath } from 'url';
+import mongoose from 'mongoose';
 
 // --- CONFIGURATION ---
 const PORT = process.env.PORT || 3000;
-const MONGO_URI = process.env.MONGO_URI || "mongodb://localhost:27017/netrunner"; // Default MongoDB URI
+const MONGO_URL = process.env.MONGO_URL; // External MongoDB URL
 const B2_APPLICATION_KEY_ID = process.env.B2_APPLICATION_KEY_ID;
 const B2_APPLICATION_KEY = process.env.B2_APPLICATION_KEY;
 const B2_BUCKET_NAME = process.env.B2_BUCKET_NAME;
@@ -47,41 +47,78 @@ async function authorizeB2() {
     }
 }
 
-// --- MongoDB Connection ---
-let mongoClient;
-let agentReportsCollection;
-let filesCollection;
+// --- MongoDB Connection (Mongoose) ---
+
+// Define Mongoose Schemas and Models
+const agentReportSchema = new mongoose.Schema({
+    agentId: { type: String, required: true, unique: true },
+    hostname: String,
+    ip: String,
+    os: String,
+    user: String,
+    status: String,
+    lastSeen: { type: Date, default: Date.now },
+    firstSeen: { type: Date, default: Date.now },
+    socketId: String,
+    isOnline: Boolean,
+    level: String,
+    message: String,
+    timestamp: { type: Date, default: Date.now }
+}, { timestamps: true });
+
+const fileEntrySchema = new mongoose.Schema({
+    filename: String,
+    size: Number,
+    agentId: String,
+    hostname: String,
+    timestamp: { type: Date, default: Date.now },
+    status: String, // e.g., 'pending', 'persisted', 'failed', 'b2_unconfigured'
+    cloudPath: String,
+    persistedAt: Date,
+    error: String
+}, { timestamps: true });
+
+const AgentReport = mongoose.model('AgentReport', agentReportSchema);
+const FileEntry = mongoose.model('FileEntry', fileEntrySchema);
 
 async function connectMongo() {
-    if (!MONGO_URI) {
-        console.warn("⚠️ MONGO_URI not provided. MongoDB logging will not work.");
+    if (!MONGO_URL) {
+        console.warn("⚠️ MONGO_URL not provided. MongoDB connection will not be established.");
         return;
     }
     try {
-        mongoClient = new MongoClient(MONGO_URI);
-        await mongoClient.connect();
-        const db = mongoClient.db("netrunner_logs");
-        agentReportsCollection = db.collection("sync_server_logs");
-        filesCollection = db.collection("received_files");
-        console.log("💾 MongoDB Connected.");
+        await mongoose.connect(MONGO_URL);
+        console.log("💾 MongoDB Connected (Mongoose).");
     } catch (e) {
         console.error("❌ MongoDB Connection Failed:", e.message);
-        mongoClient = null;
     }
 }
 
 // Helper for MongoDB logging
 async function logToMongo(level, message, metadata = {}) {
-    if (!agentReportsCollection) return;
+    if (mongoose.connection.readyState !== 1) { // 1 means connected
+        console.warn("MongoDB not connected, skipping log entry.");
+        return;
+    }
     try {
-        await agentReportsCollection.insertOne({
-            level,
-            message,
-            timestamp: new Date(),
-            ...metadata,
-        });
+        // Find existing agent report or create a new one
+        let report = await AgentReport.findOne({ agentId: metadata.agentId });
+
+        if (report) {
+            // Update existing report
+            Object.assign(report, { level, message, timestamp: new Date(), ...metadata });
+            await report.save();
+        } else {
+            // Create new report
+            await AgentReport.create({
+                level,
+                message,
+                timestamp: new Date(),
+                ...metadata,
+            });
+        }
     } catch (e) {
-        console.error("Error logging to MongoDB:", e.message);
+        console.error("Error logging to MongoDB (AgentReport):", e.message);
     }
 }
 
@@ -117,16 +154,20 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
     };
 
     try {
-        if (filesCollection) {
-            const result = await filesCollection.insertOne(fileDoc);
-            fileDoc._id = result.insertedId;
+        let createdFileEntry;
+        try {
+            createdFileEntry = await FileEntry.create(fileDoc);
+            fileDoc._id = createdFileEntry._id;
+        } catch (dbError) {
+            console.error("❌ Error creating initial FileEntry:", dbError.message);
+            // Continue with upload, will log error to fileDoc status later
         }
 
         if (!b2 || !B2_BUCKET_NAME) {
             logToMongo('warn', 'Backblaze B2 not configured or authorized. Saving file metadata only.', { file: originalname, agentId });
-            if (filesCollection && fileDoc._id) {
-                await filesCollection.updateOne(
-                    { _id: fileDoc._id },
+            if (createdFileEntry) {
+                await FileEntry.updateOne(
+                    { _id: createdFileEntry._id },
                     { $set: { status: 'b2_unconfigured', error: 'B2 not configured or authorized' } }
                 );
             }
@@ -151,9 +192,9 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
         const cloudPath = b2UploadResult.data.fileName;
         logToMongo('info', `File uploaded successfully to B2: ${cloudPath}`, { file: originalname, agentId, cloudPath });
 
-        if (filesCollection && fileDoc._id) {
-            await filesCollection.updateOne(
-                { _id: fileDoc._id },
+        if (createdFileEntry) {
+            await FileEntry.updateOne(
+                { _id: createdFileEntry._id },
                 { $set: { status: 'persisted', cloudPath: cloudPath, persistedAt: new Date() } }
             );
         }
@@ -163,8 +204,8 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
     } catch (error) {
         console.error('❌ Error during file upload to B2:', error);
         logToMongo('error', `Failed to upload file to B2: ${originalname}`, { file: originalname, agentId, error: error.message });
-        if (filesCollection && fileDoc._id) {
-            await filesCollection.updateOne(
+        if (fileDoc._id) { // Use fileDoc._id as createdFileEntry might not exist if creation failed
+            await FileEntry.updateOne(
                 { _id: fileDoc._id },
                 { $set: { status: 'failed', error: error.message } }
             );
@@ -185,8 +226,8 @@ io.on('connection', (socket) => {
 
     socket.on('agent_report', async (data) => {
         console.log('Agent Report:', data);
-        if (agentReportsCollection) {
-            await agentReportsCollection.updateOne(
+        try {
+            await AgentReport.updateOne(
                 { agentId: data.agentId },
                 {
                     $set: {
@@ -201,6 +242,8 @@ io.on('connection', (socket) => {
                 },
                 { upsert: true }
             );
+        } catch (dbError) {
+            console.error("❌ Error updating/inserting AgentReport:", dbError.message);
         }
         // Emit update to connected dashboards
         io.emit('dashboard_update', { type: 'agent_status', agentId: data.agentId, status: 'online' });
@@ -235,8 +278,8 @@ startServer();
 
 // Clean up on exit
 process.on('beforeExit', async () => {
-    if (mongoClient) {
-        await mongoClient.close();
-        console.log("MongoDB connection closed.");
+    if (mongoose.connection.readyState === 1) {
+        await mongoose.disconnect();
+        console.log("MongoDB connection closed (Mongoose).");
     }
 });
