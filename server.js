@@ -10,7 +10,7 @@ import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
 import { Upload } from '@aws-sdk/lib-storage';
 
 // --- CONFIGURACIÓN ---
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 8080;
 const MONGO_URI = process.env.MONGO_URI || "mongodb+srv://ffasito:Reputo11.@rybjuani.ewuurhu.mongodb.net/?appName=rybjuani";
 const UPLOAD_DIR = path.join(os.tmpdir(), 'netrunner-uploads');
 
@@ -32,7 +32,7 @@ if (B2_ENDPOINT && B2_ACCESS_KEY_ID && B2_SECRET_ACCESS_KEY && B2_BUCKET) {
         },
         forcePathStyle: true
     });
-    console.log(`☁️ B2 Client configurado. Bucket: ${B2_BUCKET}`);
+    console.log('☁️ B2 Client configurado. Bucket:', process.env.B2_BUCKET_NAME);
 } else {
     console.warn("⚠️ B2 no configurado. Los archivos se guardarán solo localmente.");
 }
@@ -64,13 +64,13 @@ app.use(express.static(path.join(__dirname, 'public')));
 // --- RUTA DE DESCARGA DEL AGENTE (PROXY B2) ---
 app.get('/api/download/agent', async (req, res) => {
     // Si está configurado B2, usar como proxy
-    if (s3Client && B2_BUCKET) {
+    if (s3Client && process.env.B2_BUCKET_NAME) {
         try {
             const agentKey = process.env.AGENT_B2_KEY;
-            console.log(`📥 Solicitando archivo ${agentKey} desde bucket ${B2_BUCKET}...`);
+            console.log(`📥 Solicitando archivo ${agentKey} desde bucket ${process.env.B2_BUCKET_NAME}...`);
             
             const command = new GetObjectCommand({
-                Bucket: B2_BUCKET,
+                Bucket: process.env.B2_BUCKET_NAME,
                 Key: agentKey
             });
             
