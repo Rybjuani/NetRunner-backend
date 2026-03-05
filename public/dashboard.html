@@ -1,0 +1,84 @@
+<!-- dashboard.html -->
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard - NetRunner Sync</title>
+    <style>
+        body { font-family: sans-serif; background: #0a0a0a; color: #eee; margin: 2rem; }
+        h1, h2 { color: #3b82f6; }
+        table { width: 100%; border-collapse: collapse; margin-top: 1rem; }
+        th, td { padding: 0.75rem; border: 1px solid #333; text-align: left; }
+        th { background: #1a1a1a; }
+        button { background: #3b82f6; color: white; border: none; padding: 0.5rem 1rem; border-radius: 4px; cursor: pointer; }
+    </style>
+</head>
+<body>
+    <h1>Dashboard de Sincronización</h1>
+    
+    <button id="force-sync-btn">Forzar Sincronización Global</button>
+    
+    <h2>Agentes Conectados</h2>
+    <table id="agents-table">
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>IP</th>
+                <th>Último Heartbeat</th>
+            </tr>
+        </thead>
+        <tbody></tbody>
+    </table>
+    
+    <h2>Archivos Recibidos</h2>
+    <table id="files-table">
+        <thead>
+            <tr>
+                <th>Nombre</th>
+                <th>Tamaño</th>
+                <th>Fecha de Subida</th>
+            </tr>
+        </thead>
+        <tbody></tbody>
+    </table>
+
+    <script>
+        const forceSyncBtn = document.getElementById('force-sync-btn');
+        const agentsTable = document.getElementById('agents-table').getElementsByTagName('tbody')[0];
+        const filesTable = document.getElementById('files-table').getElementsByTagName('tbody')[0];
+
+        async function fetchData() {
+            try {
+                const res = await fetch('/api/dashboard-data');
+                const data = await res.json();
+                
+                // Agents
+                agentsTable.innerHTML = '';
+                data.agents.forEach(agent => {
+                    const row = agentsTable.insertRow();
+                    row.innerHTML = `<td>${agent.id}</td><td>${agent.ip}</td><td>${new Date(agent.lastSeen).toLocaleString()}</td>`;
+                });
+
+                // Files
+                filesTable.innerHTML = '';
+                data.files.forEach(file => {
+                    const row = filesTable.insertRow();
+                    row.innerHTML = `<td>${file.filename}</td><td>${(file.size / 1024).toFixed(2)} KB</td><td>${new Date(file.timestamp).toLocaleString()}</td>`;
+                });
+
+            } catch (e) {
+                console.error("Error fetching data:", e);
+            }
+        }
+        
+        forceSyncBtn.addEventListener('click', async () => {
+            await fetch('/api/force-sync', { method: 'POST' });
+            alert('Comando de sincronización enviado.');
+        });
+
+        setInterval(fetchData, 5000);
+        fetchData();
+    </script>
+</body>
+</html>
