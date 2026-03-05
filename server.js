@@ -62,17 +62,16 @@ if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 app.use(express.static(path.join(__dirname, 'public')));
 
 // --- RUTA DE DESCARGA DEL AGENTE (PROXY B2) ---
-const AGENT_B2_KEY = process.env.AGENT_B2_KEY || 'agent/netrunner_agent.exe';
-
 app.get('/api/download/agent', async (req, res) => {
     // Si está configurado B2, usar como proxy
     if (s3Client && B2_BUCKET) {
         try {
-            console.log(`📥 Descargando agente desde B2: ${AGENT_B2_KEY}`);
+            const agentKey = process.env.AGENT_B2_KEY;
+            console.log(`📥 Solicitando archivo ${agentKey} desde bucket ${B2_BUCKET}...`);
             
             const command = new GetObjectCommand({
                 Bucket: B2_BUCKET,
-                Key: AGENT_B2_KEY
+                Key: agentKey
             });
             
             const response = await s3Client.send(command);
