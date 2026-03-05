@@ -36,9 +36,10 @@ jobs:
         $filePath = "dist/netrunner_agent.exe"
         if (Test-Path $filePath) {
           $fileSize = (Get-Item $filePath).Length / 1MB
-          echo "file_size=$($fileSize -as [int])MB" >> $env:GITHUB_OUTPUT
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "file_size=$([int]$fileSize)MB"
         } else {
-          echo "file_size=0MB" >> $env:GITHUB_OUTPUT
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "file_size=0MB"
+        }
 
     - name: Upload Windows agent artifact
       uses: actions/upload-artifact@v4
