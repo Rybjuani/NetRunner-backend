@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import express from 'express';
 import { createServer } from 'http';
-import { Server as SocketIOServer } from 'socket.io'; // Using Socket.io
+import { Server as SocketIOServer } from 'socket.io';
 import multer from 'multer';
 import B2 from 'backblaze-b2';
 import path from 'path';
@@ -11,10 +11,10 @@ import mongoose from 'mongoose';
 
 // --- CONFIGURATION ---
 const PORT = process.env.PORT || 3000;
-const MONGO_URL = process.env.MONGO_URL; // External MongoDB URL
+const MONGO_URL = process.env.MONGO_URL; // External MongoDB URL for Mongoose
 const B2_APPLICATION_KEY_ID = process.env.B2_APPLICATION_KEY_ID;
 const B2_APPLICATION_KEY = process.env.B2_APPLICATION_KEY;
-const B2_BUCKET_NAME = process.env.B2_BUCKET_NAME;
+const B2_BUCKET_NAME = process.env.B2_BUCKET_NAME; // Expecting "KaliRyb" or similar from .env
 
 // --- Initialize Express App and HTTP Server ---
 const app = express();
