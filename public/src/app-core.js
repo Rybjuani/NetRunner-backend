@@ -148,14 +148,22 @@ function appendMessage(role, text) {
     div.id = id;
     div.className = `message message-${role} animate-reveal`;
     
-    // Limpiar tags técnicos del texto visible (con seguridad null-check)
+    // Limpiar tags técnicos del texto visible
     const safeText = typeof text === 'string' ? text : "";
-    const clean = safeText.replace(/\[FILE:.*?\][\s\S]*?\[\/FILE\]/gi, '')
-                          .replace(/\[URL:.*?\]/gi, '')
-                          .replace(/\[REQUEST_PERMISSION\]/gi, '')
-                          .trim();
+    let clean = safeText.replace(/\[FILE:.*?\][\s\S]*?\[\/FILE\]/gi, '')
+                        .replace(/\[URL:.*?\]/gi, '')
+                        .replace(/\[REQUEST_PERMISSION\]/gi, '')
+                        .trim();
     
-    div.innerHTML = `<div class="text-content">${clean.replace(/\n/g, '<br>') || 'Procesando comando...'}</div>`;
+    // Si el texto queda vacío después de limpiar tags, pero es del asistente,
+    // significa que solo ejecutó una acción silenciosa.
+    if (!clean && role === 'assistant') {
+        clean = "Ejecutando acción del sistema...";
+    } else if (!clean && role === 'user') {
+        return null; // No añadir mensajes vacíos del usuario
+    }
+    
+    div.innerHTML = `<div class="text-content">${clean.replace(/\n/g, '<br>')}</div>`;
     DOM.chat.appendChild(div);
     DOM.chat.scrollTop = DOM.chat.scrollHeight;
     return id;
