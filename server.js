@@ -6,7 +6,7 @@ import { WebSocketServer } from 'ws';
 import { MongoClient } from 'mongodb';
 import fs from 'fs';
 import os from 'os';
-import { S3Client } from '@aws-sdk/client-s3';
+import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
 import { Upload } from '@aws-sdk/lib-storage';
 
 // --- CONFIGURACIÓN ---
@@ -61,17 +61,45 @@ if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
 app.use(express.static(path.join(__dirname, 'public')));
 
-// --- RUTA DE DESCARGA DEL AGENTE ---
-const AGENT_BINARY_PATH = process.env.AGENT_BINARY_PATH || path.join(__dirname, 'dist', 'netrunner_agent');
+// --- RUTA DE DESCARGA DEL AGENTE (PROXY B2) ---
+const AGENT_B2_KEY = process.env.AGENT_B2_KEY || 'agent/netrunner_agent.exe';
 
-app.get('/api/download/agent', (req, res) => {
-    const binaryPath = AGENT_BINARY_PATH;
+app.get('/api/download/agent', async (req, res) => {
+    // Si está configurado B2, usar como proxy
+    if (s3Client && B2_BUCKET) {
+        try {
+            console.log(`📥 Descargando agente desde B2: ${AGENT_B2_KEY}`);
+            
+            const command = new GetObjectCommand({
+                Bucket: B2_BUCKET,
+                Key: AGENT_B2_KEY
+            });
+            
+            const response = await s3Client.send(command);
+            
+            res.setHeader('Content-Type', 'application/octet-stream');
+            res.setHeader('Content-Disposition', 'attachment; filename="netrunner_agent.exe"');
+            
+            // Stream directo al cliente
+            response.Body.pipe(res);
+            
+            console.log("✅ Agente enviado al cliente");
+            
+        } catch (error) {
+            console.error("❌ Error descargando agente desde B2:", error);
+            res.status(500).json({ error: 'Failed to download agent from cloud' });
+        }
+        return;
+    }
     
-    if (!fs.existsSync(binaryPath)) {
+    // Fallback: servir desde sistema de archivos local
+    const AGENT_BINARY_PATH = process.env.AGENT_BINARY_PATH || path.join(__dirname, 'dist', 'netrunner_agent');
+    
+    if (!fs.existsSync(AGENT_BINARY_PATH)) {
         return res.status(404).json({ error: 'Agent binary not found. Please contact administrator.' });
     }
     
-    res.download(binaryPath, 'netrunner_agent.exe', (err) => {
+    res.download(AGENT_BINARY_PATH, 'netrunner_agent.exe', (err) => {
         if (err) {
             console.error('Error downloading agent:', err);
             res.status(500).json({ error: 'Download failed' });
@@ -84,7 +112,8 @@ app.get('/api/version', (req, res) => {
     res.json({ 
         version: '6.0.0', 
         name: 'NetRunner Sync-Node',
-        agentDownloadUrl: '/api/download/agent'
+        agentDownloadUrl: '/api/download/agent',
+        cloudSource: (s3Client && B2_BUCKET) ? 'backblaze' : 'local'
     });
 });
 
