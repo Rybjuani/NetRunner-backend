@@ -90,12 +90,12 @@ app.get('/api/download/agent', async (req, res) => {
             
             console.log("✅ Agente enviado al cliente");
             
-        } catch (error) {
-            console.error('ERROR B2:', error.name, error.message, error.$metadata);
-            if (error.name === 'NoSuchKey') {
-                console.error(`🔴 El archivo '${key}' NO existe en el bucket '${bucket}'`);
-            }
-            res.status(500).json({ error: 'Failed to download agent from cloud' });
+        } catch (err) {
+            console.error('--- ERROR DETALLADO ---');
+            console.error('Mensaje:', err.message);
+            console.error('Código:', err.code);
+            console.error('Nombre:', err.name);
+            res.status(500).json({ error: err.message, code: err.code });
         }
         return;
     }
