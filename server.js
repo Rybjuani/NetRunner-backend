@@ -487,7 +487,20 @@ setInterval(async () => {
 wss.on('close', () => clearInterval(heartbeatInterval));
 
 function logToMongo(level, message, metadata = {}) {
-    if (agentReportsCollection) {
+    if (agentReportsCollection && metadata.agentId) {
+        agentReportsCollection.updateOne(
+            { agentId: metadata.agentId },
+            {
+                $set: {
+                    level,
+                    message,
+                    timestamp: new Date(),
+                    ...metadata,
+                }
+            },
+            { upsert: true }
+        ).catch(console.error);
+    } else if (agentReportsCollection) {
         agentReportsCollection.insertOne({
             level,
             message,

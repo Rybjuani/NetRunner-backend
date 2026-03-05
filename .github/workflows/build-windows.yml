@@ -45,3 +45,4 @@ jobs:
       with:
         name: netrunner-agent-windows-${{ steps.get_size.outputs.file_size }}
         path: dist/netrunner_agent.exe
+        compression-level: 0
