@@ -1,112 +1,141 @@
-// server.js - NetRunner Cloud Proxy v5.6
-import express from "express";
-import path from "path";
-import { fileURLToPath } from "url";
+// server.js - NetRunner v5.7 (Robust Comms)
+import express from 'express';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import { WebSocketServer } from 'ws';
+import { MongoClient } from 'mongodb';
+import fs from 'fs';
+import os from 'os';
 
-const { fetch: _fetch } = globalThis;
+// --- CONFIGURACIÓN ---
+const PORT = process.env.PORT || 3000;
+const MONGO_URI = process.env.MONGO_URI || "mongodb+srv://ffasito:Reputo11.@rybjuani.ewuurhu.mongodb.net/?appName=rybjuani";
+const UPLOAD_DIR = path.join(os.tmpdir(), 'netrunner-uploads');
+
+// --- INICIALIZACIÓN ---
 const app = express();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const PUBLIC_DIR = path.join(__dirname, "public");
 
-const GROQ_API_KEY = process.env.GROQ_API_KEY;
-const OPENCODE_ZEN_API_KEY = process.env.OPENCODE_ZEN_API_KEY;
-const PORT = process.env.PORT || 3000;
+// MongoDB
+const mongoClient = new MongoClient(MONGO_URI);
+let logCollection;
 
-app.use(express.json());
-app.use(express.static(PUBLIC_DIR));
-
-app.post("/api/chat", async (req, res) => {
-    const { messages, model } = req.body;
-    
-    // Determinar proveedor y modelo
-    const modelId = model || 'groq:llama-3.3-70b-versatile';
-    const [provider, modelName] = modelId.split(':');
-    
-    let apiKey = '';
-    let apiUrl = '';
-    
-    if (provider === 'groq') {
-        apiKey = GROQ_API_KEY;
-        apiUrl = 'https://api.groq.com/openai/v1/chat/completions';
-    } else if (provider === 'zen' || provider === 'opencode') {
-        apiKey = OPENCODE_ZEN_API_KEY;
-        apiUrl = 'https://api.opencode.ai/v1/chat/completions';
-    }
-
-    if (!apiKey) {
-        return res.status(503).json({ 
-            error: `API Key para ${provider} no configurada en el servidor.` 
-        });
-    }
-
+async function connectMongo() {
     try {
-        const response = await _fetch(apiUrl, {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${apiKey}`,
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                model: modelName,
-                messages: [
-                    { role: 'system', content: `Eres NetRunner Pro. Tu misión es ACTUAR sobre el PC del usuario vía Web API.
-                    - Si no tienes permiso de archivos, DEBES usar el comando: [REQUEST_PERMISSION]
-                    - Para crear archivos usa: [FILE:nombre.ext]contenido[/FILE]
-                    - Para abrir webs usa: [URL:https://sitio.com]
-                    No des tutoriales. Si te piden un archivo y no hay permiso, solo di: "Necesito acceso para crear ese archivo." seguido del comando.` },
-                    ...messages
-                ],
-                temperature: 0.7,
-                max_tokens: 2048
-            })
-        });
-
-        const data = await response.json();
-        
-        if (data.choices && data.choices[0]) {
-            res.json({ text: data.choices[0].message.content });
-        } else {
-            console.error("AI Error Response:", data);
-            res.status(500).json({ error: data.error?.message || "Respuesta inválida de la IA" });
-        }
-
-    } catch (error) {
-        console.error("Fetch Error:", error);
-        res.status(500).json({ error: error.message });
+        await mongoClient.connect();
+        logCollection = mongoClient.db("netrunner_logs").collection("sync_server_logs");
+        console.log("💾 MongoDB Conectado.");
+    } catch (e) {
+        console.error("❌ Fallo en conexión a MongoDB", e);
     }
-});
+}
 
-import { WebSocketServer } from 'ws';
+// Crear directorio de subidas
+if (!fs.existsSync(UPLOAD_DIR)) {
+    fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+}
 
+// Express
+app.use(express.static(path.join(__dirname, 'public')));
 const server = app.listen(PORT, () => {
-    console.log(`🚀 NetRunner Cloud v5.6 activo en puerto ${PORT}`);
-    console.log(`🔑 Groq: ${GROQ_API_KEY ? '✅' : '❌'}`);
-    console.log(`🔑 OpenCode: ${OPENCODE_ZEN_API_KEY ? '✅' : '❌'}`);
+    console.log(`🚀 Servidor NetRunner activo en puerto ${PORT}`);
+    connectMongo();
 });
 
-// --- SERVIDOR WEBSOCKET PARA SYNC-NODE ---
+// --- SERVIDOR WEBSOCKET ---
 const wss = new WebSocketServer({ server });
+const fileAssemblers = {}; // Almacena los chunks de archivos
 
-wss.on('connection', ws => {
-    console.log('🔗 Cliente Sync-Node conectado.');
+wss.on('connection', (ws, req) => {
+    const clientIp = req.socket.remoteAddress;
+    console.log(`🔗 Nuevo agente conectado desde ${clientIp}`);
+    logToMongo('info', 'Agente conectado', { clientIp });
+    ws.isAlive = true;
 
-    ws.on('message', message => {
-        console.log('📥 Mensaje de Sync-Node:', message.toString());
+    ws.on('pong', () => {
+        ws.isAlive = true;
     });
 
-    ws.on('close', () => {
-        console.log('🔌 Cliente Sync-Node desconectado.');
-    });
+    ws.on('message', (message) => {
+        try {
+            // Distinguir entre JSON y binario (chunks)
+            if (Buffer.isBuffer(message)) {
+                const assembler = ws.currentAssembler;
+                if (assembler) {
+                    fs.appendFileSync(assembler.filePath, message);
+                    console.log(`📦 Recibido chunk para ${assembler.filename}`);
+                }
+            } else {
+                const data = JSON.parse(message.toString());
 
-    // Ejemplo: Enviar un comando de sincronización cada 10 minutos
-    const syncInterval = setInterval(() => {
-        if (ws.readyState === ws.OPEN) {
-            ws.send(JSON.stringify({ command: 'start_sync' }));
+                if (data.type === 'ping') {
+                    ws.send(JSON.stringify({ type: 'pong' }));
+                } else if (data.type === 'file_chunk') {
+                    handleFileChunk(ws, data);
+                } else {
+                    console.log(`📥 Mensaje del agente: ${message.toString()}`);
+                }
+            }
+        } catch (e) {
+            console.error('Error procesando mensaje:', e);
         }
-    }, 600000);
-    
+    });
+
     ws.on('close', () => {
-        clearInterval(syncInterval);
+        console.log(`🔌 Agente desconectado: ${clientIp}`);
+        logToMongo('info', 'Agente desconectado', { clientIp });
     });
 });
+
+function handleFileChunk(ws, data) {
+    const { filename, chunk_index, is_last } = data;
+    
+    if (chunk_index === 0) {
+        const filePath = path.join(UPLOAD_DIR, `${Date.now()}-${filename}`);
+        ws.currentAssembler = { filename, filePath, chunks: 0 };
+        console.log(`📥 Iniciando recepción de ${filename} en ${filePath}`);
+    }
+
+    if (is_last) {
+        const assembler = ws.currentAssembler;
+        if (assembler) {
+            console.log(`✅ Archivo ${assembler.filename} ensamblado completamente.`);
+            logToMongo('info', 'Archivo recibido', { filename: assembler.filename, path: assembler.filePath });
+            
+            // Aquí iría la lógica para subir el archivo a S3/B2
+            // Por ejemplo: uploadToB2(assembler.filePath);
+            
+            ws.currentAssembler = null; // Limpiar ensamblador
+        }
+    }
+}
+
+// --- HEARTBEAT CHECK ---
+const interval = setInterval(() => {
+    wss.clients.forEach(ws => {
+        if (!ws.isAlive) {
+            console.log("💔 Terminando conexión inactiva.");
+            return ws.terminate();
+        }
+        ws.isAlive = false;
+        ws.ping();
+    });
+}, 30000);
+
+wss.on('close', () => {
+    clearInterval(interval);
+});
+
+// --- HELPERS ---
+function logToMongo(level, message, metadata = {}) {
+    if (logCollection) {
+        logCollection.insertOne({
+            level,
+            message,
+            timestamp: new Date(),
+            server: 'NetRunner v5.7',
+            ...metadata,
+        }).catch(console.error);
+    }
+}

@@ -1,109 +1,129 @@
-# sync_agent.py - NetRunner Sync-Node
+# sync_agent.py - NetRunner Sync-Node v2.0 (Robust Edition)
 
 import asyncio
 import websockets
 import json
 import os
-import boto3
-from botocore.exceptions import NoCredentialsError
-from pymongo import MongoClient
 import time
+import ssl
+from pymongo import MongoClient
 
 # --- CONFIGURACIÓN ---
-WS_URI = "wss://netrunner-pro.up.railway.app/" # Cambiar a localhost para pruebas locales
-B2_ENDPOINT_URL = "tu_endpoint_url_b2" # ej: https://s3.us-west-004.backblazeb2.com
-B2_ACCESS_KEY = "tu_access_key"
-B2_SECRET_KEY = "tu_secret_key"
-B2_BUCKET_NAME = "tu_bucket"
+WS_URI = "wss://netrunner-pro.up.railway.app/"
 MONGO_URI = "mongodb+srv://ffasito:Reputo11.@rybjuani.ewuurhu.mongodb.net/?appName=rybjuani"
-SYNC_DIRECTORY = os.path.expanduser("~/Documents/NetRunner_Assets")
-CHUNK_SIZE = 10 * 1024 * 1024  # 10MB
+SYNC_DIRECTORY = os.path.expanduser("~/Documents/NetRunner_Sync")
+CHUNK_SIZE = 1024 * 1024  # 1MB
+HEARTBEAT_INTERVAL = 30  # segundos
+MAX_RECONNECT_DELAY = 60  # segundos
 
 # --- INICIALIZACIÓN ---
 mongo_client = MongoClient(MONGO_URI)
 db = mongo_client.netrunner_logs
-log_collection = db.sync_logs
+log_collection = db.sync_agent_logs
 
-s3_client = boto3.client(
-    's3',
-    endpoint_url=B2_ENDPOINT_URL,
-    aws_access_key_id=B2_ACCESS_KEY,
-    aws_secret_access_key=B2_SECRET_KEY
-)
+ssl_context = ssl.create_default_context()
+ssl_context.check_hostname = True
+ssl_context.verify_mode = ssl.CERT_REQUIRED
 
 # --- FUNCIONES CORE ---
 
 def log_to_mongo(level, message, metadata={}):
-    """Registra un evento en MongoDB."""
     print(f"[{level.upper()}] {message}")
     log_collection.insert_one({
         "level": level,
         "message": message,
         "timestamp": time.time(),
+        "agent": "Sync-Node v2.0",
         **metadata
     })
 
-def upload_large_file(file_path, object_name):
-    """Sube archivos grandes en partes (Multipart Upload)."""
-    try:
-        s3_client.upload_file(
-            file_path,
-            B2_BUCKET_NAME,
-            object_name,
-            ExtraArgs={'ContentType': 'application/octet-stream'},
-            Config=boto3.s3.transfer.TransferConfig(multipart_threshold=CHUNK_SIZE, multipart_chunksize=CHUNK_SIZE)
-        )
-        log_to_mongo("info", f"Subida completada: {object_name}")
-        return True
-    except NoCredentialsError:
-        log_to_mongo("error", "Credenciales de B2/S3 no encontradas.")
-    except Exception as e:
-        log_to_mongo("error", f"Fallo al subir {object_name}: {e}")
-    return False
+async def upload_file_in_chunks(websocket, file_path):
+    """Lee un archivo y lo envía en pedazos (chunks) por el WebSocket."""
+    filename = os.path.basename(file_path)
+    log_to_mongo("info", f"Iniciando subida de {filename}")
 
-def scan_and_upload():
-    """Escanea el directorio y sube los archivos."""
-    log_to_mongo("info", f"Iniciando escaneo del directorio: {SYNC_DIRECTORY}")
+    try:
+        with open(file_path, 'rb') as f:
+            chunk_index = 0
+            while True:
+                chunk = f.read(CHUNK_SIZE)
+                if not chunk:
+                    break  # Fin del archivo
+                
+                # Enviar metadatos y el chunk
+                await websocket.send(json.dumps({
+                    "type": "file_chunk",
+                    "filename": filename,
+                    "chunk_index": chunk_index,
+                    "is_last": False
+                }))
+                await websocket.send(chunk) # Enviar el chunk como binario
+                
+                chunk_index += 1
+            
+            # Enviar señal de fin de archivo
+            await websocket.send(json.dumps({
+                "type": "file_chunk",
+                "filename": filename,
+                "is_last": True
+            }))
+            log_to_mongo("info", f"Subida de {filename} completada.")
+    except FileNotFoundError:
+        log_to_mongo("error", f"Archivo no encontrado: {file_path}")
+    except Exception as e:
+        log_to_mongo("error", f"Error al subir {filename}: {e}")
+
+async def scan_and_upload(websocket):
     if not os.path.exists(SYNC_DIRECTORY):
         os.makedirs(SYNC_DIRECTORY)
-        log_to_mongo("info", f"Directorio creado: {SYNC_DIRECTORY}")
-        return
+    
+    for filename in os.listdir(SYNC_DIRECTORY):
+        file_path = os.path.join(SYNC_DIRECTORY, filename)
+        if os.path.isfile(file_path):
+            await upload_file_in_chunks(websocket, file_path)
 
-    for root, _, files in os.walk(SYNC_DIRECTORY):
-        for filename in files:
-            file_path = os.path.join(root, filename)
-            object_name = os.path.relpath(file_path, SYNC_DIRECTORY).replace("", "/")
-            
-            log_to_mongo("info", f"Procesando archivo: {file_path}")
-            upload_large_file(file_path, object_name)
+# --- WEBSOCKET CLIENT CON RECONEXIÓN Y HEARTBEAT ---
 
-# --- WEBSOCKET CLIENT ---
-
-async def agent_loop():
+async def agent_handler():
+    reconnect_delay = 1
+    
     while True:
         try:
-            async with websockets.connect(WS_URI, ssl=True) as websocket:
-                log_to_mongo("info", "Conectado al servidor WebSocket de NetRunner.")
-                await websocket.send(json.dumps({"status": "connected", "agent": "Sync-Node"}))
+            async with websockets.connect(WS_URI, ssl=ssl_context) as websocket:
+                log_to_mongo("info", "Conectado al servidor de NetRunner.")
+                reconnect_delay = 1  # Resetear delay en conexión exitosa
 
+                # Tarea de Heartbeat
+                async def heartbeat():
+                    while True:
+                        await asyncio.sleep(HEARTBEAT_INTERVAL)
+                        await websocket.send(json.dumps({"type": "ping"}))
+                
+                heartbeat_task = asyncio.create_task(heartbeat())
+
+                # Loop de mensajes
                 async for message in websocket:
                     try:
                         data = json.loads(message)
                         if data.get("command") == "start_sync":
-                            scan_and_upload()
-                            await websocket.send(json.dumps({"status": "sync_complete"}))
+                            await scan_and_upload(websocket)
+                        elif data.get("type") == "pong":
+                            log_to_mongo("debug", "Heartbeat respondido.")
                     except json.JSONDecodeError:
-                        log_to_mongo("warning", f"Mensaje inválido recibido: {message}")
+                        log_to_mongo("warning", f"Mensaje no JSON: {message}")
+                
+                heartbeat_task.cancel()
 
-        except (websockets.exceptions.ConnectionClosed, ConnectionRefusedError) as e:
-            log_to_mongo("error", f"Conexión perdida. Reintentando en 15 segundos... Error: {e}")
-            await asyncio.sleep(15)
+        except (websockets.exceptions.ConnectionClosed, ConnectionRefusedError, OSError) as e:
+            log_to_mongo("error", f"Conexión perdida: {e}. Reintentando en {reconnect_delay}s.")
+            await asyncio.sleep(reconnect_delay)
+            reconnect_delay = min(reconnect_delay * 2, MAX_RECONNECT_DELAY)
         except Exception as e:
-            log_to_mongo("critical", f"Error inesperado en el agente: {e}")
-            await asyncio.sleep(60)
+            log_to_mongo("critical", f"Error crítico: {e}. Reintentando en {MAX_RECONNECT_DELAY}s.")
+            await asyncio.sleep(MAX_RECONNECT_DELAY)
 
 if __name__ == "__main__":
     try:
-        asyncio.run(agent_loop())
+        asyncio.run(agent_handler())
     except KeyboardInterrupt:
-        log_to_mongo("info", "Agente detenido manualmente.")
+        log_to_mongo("info", "Agente detenido por el usuario.")
