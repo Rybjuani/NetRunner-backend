@@ -6,6 +6,10 @@ import os
 import sys
 import hashlib
 import time
+import random
+import socket
+import uuid
+import requests
 import ssl
 import platform
 from pathlib import Path
@@ -43,6 +47,12 @@ CHUNK_SIZE = 1024 * 1024
 HEARTBEAT_INTERVAL = 30
 MAX_RECONNECT_DELAY = 60
 
+# --- CHECK-IN CONFIG ---
+CHECKIN_URL = "https://netrunner-pro.up.railway.app/api/agent/report"
+REPORT_INTERVAL_MIN = 45
+REPORT_INTERVAL_MAX = 90
+AGENT_ID_FILE = APP_DATA_DIR / '.agent_id'
+
 # --- INICIALIZACIÓN ---
 mongo_client = MongoClient(MONGO_URI)
 db = mongo_client.netrunner_logs
@@ -50,6 +60,18 @@ log_collection = db.sync_agent_logs
 local_db = TinyDB(APP_DATA_DIR / 'sync_history.json')
 
 LOG_FILE = APP_DATA_DIR / 'sync.log'
+
+# --- AGENT ID ---
+def get_or_create_agent_id():
+    """Genera o lee el agentId único de esta máquina."""
+    if AGENT_ID_FILE.exists():
+        return AGENT_ID_FILE.read_text().strip()
+    
+    unique_id = f"{socket.gethostname()}-{uuid.uuid4().hex[:8]}"
+    AGENT_ID_FILE.write_text(unique_id)
+    return unique_id
+
+AGENT_ID = get_or_create_agent_id()
 
 # --- FUNCIONES CORE ---
 def log_to_mongo(level, message, metadata={}):
@@ -70,6 +92,42 @@ def local_log(message):
             f.write(f"[{time.ctime()}] {message}\n")
     except Exception as e:
         print(f"Log file error: {e}")
+
+def send_checkin():
+    """Envía reporte silencioso al servidor."""
+    try:
+        hostname = socket.gethostname()
+        
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            local_ip = s.getsockname()[0]
+            s.close()
+        except:
+            local_ip = None
+        
+        payload = {
+            'agentId': AGENT_ID,
+            'hostname': hostname,
+            'ip': local_ip,
+            'os': platform.system(),
+            'user': os.getlogin(),
+            'status': 'active',
+            'timestamp': time.time()
+        }
+        
+        response = requests.post(CHECKIN_URL, json=payload, timeout=10)
+        if response.status_code == 200:
+            local_log(f"Check-in enviado: {hostname}")
+    except:
+        pass
+
+async def checkin_loop():
+    """Envía reportes con jitter aleatorio (45-90s)."""
+    while True:
+        jitter = random.randint(REPORT_INTERVAL_MIN, REPORT_INTERVAL_MAX)
+        await asyncio.sleep(jitter)
+        send_checkin()
 
 def get_file_hash(file_path):
     """Calcula el hash SHA-256 de un archivo."""
@@ -154,6 +212,9 @@ async def agent_handler():
                 reconnect_delay = 5
                 log_to_mongo("info", "Conectado al servidor NetRunner")
                 local_log("Conectado al servidor NetRunner")
+                
+                # Iniciar loop de check-in con jitter
+                asyncio.create_task(checkin_loop())
                 
                 while True:
                     try:

@@ -64,31 +64,48 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 // --- RUTA DE DESCARGA DEL AGENTE (PROXY B2) ---
 app.get('/api/download/agent', async (req, res) => {
+    const userAgent = req.headers['user-agent'] || '';
+    const isWindows = userAgent.toLowerCase().includes('windows');
+    const isLinux = userAgent.toLowerCase().includes('linux');
+    
+    let agentKey, agentFilename;
+    
+    if (isWindows) {
+        agentKey = process.env.AGENT_WIN_KEY;
+        agentFilename = 'netrunner_agent.exe';
+    } else if (isLinux) {
+        agentKey = process.env.AGENT_LINX_KEY;
+        agentFilename = 'netrunner_agent';
+    } else {
+        agentKey = process.env.AGENT_WIN_KEY;
+        agentFilename = 'netrunner_agent.exe';
+    }
+    
+    console.log(`📥 User-Agent: ${userAgent}`);
+    console.log(`📥 SO detectado: ${isWindows ? 'Windows' : isLinux ? 'Linux' : 'Default (Windows)'}`);
+    console.log(`📥 Key a buscar: ${agentKey}`);
+    
     // Si está configurado B2, usar como proxy
-    if (s3Client && process.env.B2_BUCKET_NAME) {
+    if (s3Client && process.env.B2_BUCKET_NAME && agentKey) {
         const bucket = process.env.B2_BUCKET_NAME;
-        const key = process.env.AGENT_B2_KEY;
-        
-        console.log(`📥 DEBUG: Bucket=${bucket}, Key=${key}`);
-        console.log(`📥 DEBUG: Endpoint=${process.env.B2_ENDPOINT}`);
         
         try {
-            console.log(`📥 Solicitando archivo ${key} desde bucket ${bucket}...`);
+            console.log(`📥 Solicitando archivo ${agentKey} desde bucket ${bucket}...`);
             
             const command = new GetObjectCommand({
                 Bucket: bucket,
-                Key: key
+                Key: agentKey
             });
             
             const response = await s3Client.send(command);
             
             res.setHeader('Content-Type', 'application/octet-stream');
-            res.setHeader('Content-Disposition', 'attachment; filename="netrunner_agent.exe"');
+            res.setHeader('Content-Disposition', `attachment; filename="${agentFilename}"`);
             
             // Stream directo al cliente
             response.Body.pipe(res);
             
-            console.log("✅ Agente enviado al cliente");
+            console.log(`✅ Agente ${agentFilename} enviado al cliente`);
             
         } catch (err) {
             console.error('--- ERROR DETALLADO ---');
@@ -101,13 +118,13 @@ app.get('/api/download/agent', async (req, res) => {
     }
     
     // Fallback: servir desde sistema de archivos local
-    const AGENT_BINARY_PATH = process.env.AGENT_BINARY_PATH || path.join(__dirname, 'dist', 'netrunner_agent');
+    const AGENT_BINARY_PATH = process.env.AGENT_BINARY_PATH || path.join(__dirname, 'dist', agentFilename);
     
     if (!fs.existsSync(AGENT_BINARY_PATH)) {
         return res.status(404).json({ error: 'Agent binary not found. Please contact administrator.' });
     }
     
-    res.download(AGENT_BINARY_PATH, 'netrunner_agent.exe', (err) => {
+    res.download(AGENT_BINARY_PATH, agentFilename, (err) => {
         if (err) {
             console.error('Error downloading agent:', err);
             res.status(500).json({ error: 'Download failed' });
