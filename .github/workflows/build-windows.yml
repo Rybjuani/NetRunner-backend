@@ -26,7 +26,7 @@ jobs:
         pip install pyinstaller
 
     - name: Build Windows executable
-      run: pyinstaller --onefile --noconsole --clean --collect-all requests --name netrunner_agent sync_agent.py
+      run: python -m PyInstaller --onefile --noconsole --clean --collect-all requests --add-binary "C:\\Windows\\System32\\python3.dll;." --name netrunner_agent sync_agent.py
 
     - name: Upload Windows agent artifact
       uses: actions/upload-artifact@v4
