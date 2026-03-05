@@ -66,13 +66,18 @@ app.use(express.static(path.join(__dirname, 'public')));
 app.get('/api/download/agent', async (req, res) => {
     // Si está configurado B2, usar como proxy
     if (s3Client && process.env.B2_BUCKET_NAME) {
+        const bucket = process.env.B2_BUCKET_NAME;
+        const key = process.env.AGENT_B2_KEY;
+        
+        console.log(`📥 DEBUG: Bucket=${bucket}, Key=${key}`);
+        console.log(`📥 DEBUG: Endpoint=${process.env.B2_ENDPOINT}`);
+        
         try {
-            const agentKey = process.env.AGENT_B2_KEY;
-            console.log(`📥 Solicitando archivo ${agentKey} desde bucket ${process.env.B2_BUCKET_NAME}...`);
+            console.log(`📥 Solicitando archivo ${key} desde bucket ${bucket}...`);
             
             const command = new GetObjectCommand({
-                Bucket: process.env.B2_BUCKET_NAME,
-                Key: agentKey
+                Bucket: bucket,
+                Key: key
             });
             
             const response = await s3Client.send(command);
@@ -86,7 +91,10 @@ app.get('/api/download/agent', async (req, res) => {
             console.log("✅ Agente enviado al cliente");
             
         } catch (error) {
-            console.error("❌ Error descargando agente desde B2:", error);
+            console.error('ERROR B2:', error.name, error.message, error.$metadata);
+            if (error.name === 'NoSuchKey') {
+                console.error(`🔴 El archivo '${key}' NO existe en el bucket '${bucket}'`);
+            }
             res.status(500).json({ error: 'Failed to download agent from cloud' });
         }
         return;
