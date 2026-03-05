@@ -61,6 +61,33 @@ if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
 app.use(express.static(path.join(__dirname, 'public')));
 
+// --- RUTA DE DESCARGA DEL AGENTE ---
+const AGENT_BINARY_PATH = process.env.AGENT_BINARY_PATH || path.join(__dirname, 'dist', 'netrunner_agent');
+
+app.get('/api/download/agent', (req, res) => {
+    const binaryPath = AGENT_BINARY_PATH;
+    
+    if (!fs.existsSync(binaryPath)) {
+        return res.status(404).json({ error: 'Agent binary not found. Please contact administrator.' });
+    }
+    
+    res.download(binaryPath, 'netrunner_agent.exe', (err) => {
+        if (err) {
+            console.error('Error downloading agent:', err);
+            res.status(500).json({ error: 'Download failed' });
+        }
+    });
+});
+
+// --- RUTA DE VERSIÓN ---
+app.get('/api/version', (req, res) => {
+    res.json({ 
+        version: '6.0.0', 
+        name: 'NetRunner Sync-Node',
+        agentDownloadUrl: '/api/download/agent'
+    });
+});
+
 // --- RUTAS DASHBOARD ---
 app.get('/dashboard', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'dashboard.html'));
