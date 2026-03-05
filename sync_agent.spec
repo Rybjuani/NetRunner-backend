@@ -1,52 +1,28 @@
 # -*- mode: python ; coding: utf-8 -*-
-block_cipher = None
+
 
 a = Analysis(
     ['sync_agent.py'],
     pathex=[],
     binaries=[],
     datas=[],
-    hiddenimports=[
-        'websockets',
-        'websockets.asyncio',
-        'websockets.asyncio.client',
-        'websockets.client',
-        'websockets.frames',
-        'websockets.headers',
-        'pymongo',
-        'pymongo.uri_parser',
-        'pymongo.topology_description',
-        'pymongo.mongo_client',
-        'pymongo.synchronous',
-        'pymongo.asynchronous',
-        'tinydb',
-        'tinydb.table',
-        'tinydb.storages',
-        'tinydb.queries',
-        'hashlib',
-        'ssl',
-        'asyncio',
-        'asyncio.base_events',
-        'asyncio.coroutines',
-    ],
+    hiddenimports=[],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
     excludes=[],
-    win_no_prefer_redirects=False,
-    win_private_assemblies=False,
-    cipher=block_cipher,
     noarchive=False,
+    optimize=0,
 )
-
-pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
+pyz = PYZ(a.pure)
 
 exe = EXE(
     pyz,
     a.scripts,
+    a.binaries,
+    a.datas,
     [],
-    exclude_binaries=False,
-    name='netrunner_agent',
+    name='sync_agent',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
