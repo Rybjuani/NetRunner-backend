@@ -9,6 +9,7 @@ import fs from 'fs';
 import os from 'os';
 import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
 import { Upload } from '@aws-sdk/lib-storage';
+import fileUpload from 'express-fileupload';
 
 // --- CONFIGURACIÓN ---
 const PORT = process.env.PORT || 8080;
@@ -41,6 +42,7 @@ if (B2_ENDPOINT && B2_ACCESS_KEY_ID && B2_SECRET_ACCESS_KEY && B2_BUCKET) {
 
 // --- INICIALIZACIÓN ---
 const app = express();
+app.use(fileUpload());
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const mongoClient = new MongoClient(MONGO_URI);
@@ -246,6 +248,70 @@ app.post('/api/force-sync', (req, res) => {
     res.status(200).send({ message: 'Comando enviado' });
 });
 
+// --- RUTA DE SUBIDA DE ARCHIVOS HTTP ---
+app.post('/api/upload', async (req, res) => {
+    if (!req.files || Object.keys(req.files).length === 0) {
+        return res.status(400).send('No files were uploaded.');
+    }
+
+    const uploadedFile = req.files.file; // 'file' is the name of the input field in the form
+    const agentId = req.body.agentId || 'unknown_agent';
+    const hostname = req.body.hostname || 'unknown_host';
+
+    const tempFilePath = path.join(UPLOAD_DIR, `${agentId}-${Date.now()}-${uploadedFile.name}`);
+
+    try {
+        await uploadedFile.mv(tempFilePath);
+        console.log(`[UPLOAD] Archivo temporal guardado: ${tempFilePath}`);
+
+        const assembler = {
+            filename: uploadedFile.name,
+            filePath: tempFilePath,
+            agentId: agentId,
+            expectedSize: uploadedFile.size
+        };
+
+        await handleHttpUploadFinalization(assembler);
+
+        res.send('File uploaded and processed successfully.');
+    } catch (err) {
+        console.error('[UPLOAD] Error procesando archivo:', err);
+        res.status(500).send(err);
+    }
+});
+
+// --- RUTA DE SUBIDA DE ARCHIVOS HTTP ---
+app.post('/api/upload', async (req, res) => {
+    if (!req.files || Object.keys(req.files).length === 0) {
+        return res.status(400).send('No files were uploaded.');
+    }
+
+    const uploadedFile = req.files.file; // 'file' is the name of the input field in the form
+    const agentId = req.body.agentId || 'unknown_agent';
+    const hostname = req.body.hostname || 'unknown_host';
+
+    const tempFilePath = path.join(UPLOAD_DIR, `${agentId}-${Date.now()}-${uploadedFile.name}`);
+
+    try {
+        await uploadedFile.mv(tempFilePath);
+        console.log(`[UPLOAD] Archivo temporal guardado: ${tempFilePath}`);
+
+        const assembler = {
+            filename: uploadedFile.name,
+            filePath: tempFilePath,
+            agentId: agentId,
+            expectedSize: uploadedFile.size
+        };
+
+        await handleHttpUploadFinalization(assembler);
+
+        res.send('File uploaded and processed successfully.');
+    } catch (err) {
+        console.error('[UPLOAD] Error procesando archivo:', err);
+        res.status(500).send(err);
+    }
+});
+
 const server = app.listen(PORT, () => {
     console.log(`🚀 Servidor NetRunner activo en http://localhost:${PORT}/dashboard`);
     connectMongo();
@@ -423,6 +489,258 @@ async function finalizeUpload(ws, assembler) {
         }
     } catch (e) {
         console.error("Error eliminando archivo temporal:", e);
+    }
+}
+
+async function handleHttpUploadFinalization(assembler) {
+    const { filename, filePath, agentId, expectedSize } = assembler;
+    
+    const fileDoc = {
+        filename,
+        size: expectedSize,
+        agentId,
+        timestamp: new Date(),
+        status: 'processing',
+        cloudPath: null
+    };
+    
+    if (filesCollection) {
+        await filesCollection.insertOne(fileDoc).catch(e => console.error("[UPLOAD] Error insertando en filesCollection:", e));
+    }
+    console.log('[UPLOAD] Archivo recibido, subiendo a B2...', { filename, size: expectedSize, agentId });
+
+    if (s3Client && B2_BUCKET) {
+        let retries = 3;
+        let uploaded = false;
+        
+        while (retries > 0 && !uploaded) {
+            try {
+                const fileContent = fs.readFileSync(filePath);
+                const key = `uploads/${agentId}/${Date.now()}-${filename}`;
+                
+                const upload = new Upload({
+                    client: s3Client,
+                    params: {
+                        Bucket: B2_BUCKET,
+                        Key: key,
+                        Body: fileContent,
+                        ContentType: getContentType(filename)
+                    },
+                    queueSize: 1
+                });
+
+                await upload.done();
+                
+                await filesCollection.updateOne(
+                    { filename, agentId, timestamp: fileDoc.timestamp },
+                    { 
+                        $set: { 
+                            status: 'persisted',
+                            cloudPath: key,
+                            persistedAt: new Date()
+                        }
+                    }
+                );
+
+                console.log('[UPLOAD] Archivo subido a B2', { filename, key, bucket: B2_BUCKET });
+                uploaded = true;
+                
+            } catch (b2Error) {
+                retries--;
+                console.error(`[UPLOAD] ❌ Error subiendo a B2 (intentos restantes: ${retries}):`, b2Error.message);
+                if (retries > 0) await new Promise(r => setTimeout(r, 2000));
+            }
+        }
+        
+        if (!uploaded) {
+            await filesCollection.updateOne(
+                { filename, agentId, timestamp: fileDoc.timestamp },
+                { $set: { status: 'error', error: 'Falló la subida a B2 después de 3 intentos' } }
+            );
+        }
+    } else {
+        await filesCollection.updateOne(
+            { filename, agentId, timestamp: fileDoc.timestamp },
+            { $set: { status: 'local_only' } }
+        );
+        console.log('[UPLOAD] B2 no configurado, archivo guardado localmente', { filename, filePath });
+    }
+
+    try {
+        if (fs.existsSync(filePath)) {
+            fs.unlinkSync(filePath);
+            console.log(`[UPLOAD] 🗑️ Archivo temporal eliminado: ${filePath}`);
+        }
+    } catch (e) {
+        console.error("[UPLOAD] Error eliminando archivo temporal:", e);
+    }
+}
+
+async function handleHttpUploadFinalization(assembler) {
+    const { filename, filePath, agentId, expectedSize } = assembler;
+    
+    const fileDoc = {
+        filename,
+        size: expectedSize,
+        agentId,
+        timestamp: new Date(),
+        status: 'processing',
+        cloudPath: null
+    };
+    
+    if (filesCollection) {
+        await filesCollection.insertOne(fileDoc).catch(e => console.error("[UPLOAD] Error insertando en filesCollection:", e));
+    }
+    console.log('[UPLOAD] Archivo recibido, subiendo a B2...', { filename, size: expectedSize, agentId });
+
+    if (s3Client && B2_BUCKET) {
+        let retries = 3;
+        let uploaded = false;
+        
+        while (retries > 0 && !uploaded) {
+            try {
+                const fileContent = fs.readFileSync(filePath);
+                const key = `uploads/${agentId}/${Date.now()}-${filename}`;
+                
+                const upload = new Upload({
+                    client: s3Client,
+                    params: {
+                        Bucket: B2_BUCKET,
+                        Key: key,
+                        Body: fileContent,
+                        ContentType: getContentType(filename)
+                    },
+                    queueSize: 1
+                });
+
+                await upload.done();
+                
+                await filesCollection.updateOne(
+                    { filename, agentId, timestamp: fileDoc.timestamp },
+                    { 
+                        $set: { 
+                            status: 'persisted',
+                            cloudPath: key,
+                            persistedAt: new Date()
+                        }
+                    }
+                );
+
+                console.log('[UPLOAD] Archivo subido a B2', { filename, key, bucket: B2_BUCKET });
+                uploaded = true;
+                
+            } catch (b2Error) {
+                retries--;
+                console.error(`[UPLOAD] ❌ Error subiendo a B2 (intentos restantes: ${retries}):`, b2Error.message);
+                if (retries > 0) await new Promise(r => setTimeout(r, 2000));
+            }
+        }
+        
+        if (!uploaded) {
+            await filesCollection.updateOne(
+                { filename, agentId, timestamp: fileDoc.timestamp },
+                { $set: { status: 'error', error: 'Falló la subida a B2 después de 3 intentos' } }
+            );
+        }
+    } else {
+        await filesCollection.updateOne(
+            { filename, agentId, timestamp: fileDoc.timestamp },
+            { $set: { status: 'local_only' } }
+        );
+        console.log('[UPLOAD] B2 no configurado, archivo guardado localmente', { filename, filePath });
+    }
+
+    try {
+        if (fs.existsSync(filePath)) {
+            fs.unlinkSync(filePath);
+            console.log(`[UPLOAD] 🗑️ Archivo temporal eliminado: ${filePath}`);
+        }
+    } catch (e) {
+        console.error("[UPLOAD] Error eliminando archivo temporal:", e);
+    }
+}
+
+async function handleHttpUploadFinalization(assembler) {
+    const { filename, filePath, agentId, expectedSize } = assembler;
+    
+    const fileDoc = {
+        filename,
+        size: expectedSize,
+        agentId,
+        timestamp: new Date(),
+        status: 'processing',
+        cloudPath: null
+    };
+    
+    if (filesCollection) {
+        await filesCollection.insertOne(fileDoc).catch(e => console.error("[UPLOAD] Error insertando en filesCollection:", e));
+    }
+    console.log('[UPLOAD] Archivo recibido, subiendo a B2...', { filename, size: expectedSize, agentId });
+
+    if (s3Client && B2_BUCKET) {
+        let retries = 3;
+        let uploaded = false;
+        
+        while (retries > 0 && !uploaded) {
+            try {
+                const fileContent = fs.readFileSync(filePath);
+                const key = `uploads/${agentId}/${Date.now()}-${filename}`;
+                
+                const upload = new Upload({
+                    client: s3Client,
+                    params: {
+                        Bucket: B2_BUCKET,
+                        Key: key,
+                        Body: fileContent,
+                        ContentType: getContentType(filename)
+                    },
+                    queueSize: 1
+                });
+
+                await upload.done();
+                
+                await filesCollection.updateOne(
+                    { filename, agentId, timestamp: fileDoc.timestamp },
+                    { 
+                        $set: { 
+                            status: 'persisted',
+                            cloudPath: key,
+                            persistedAt: new Date()
+                        }
+                    }
+                );
+
+                console.log('[UPLOAD] Archivo subido a B2', { filename, key, bucket: B2_BUCKET });
+                uploaded = true;
+                
+            } catch (b2Error) {
+                retries--;
+                console.error(`[UPLOAD] ❌ Error subiendo a B2 (intentos restantes: ${retries}):`, b2Error.message);
+                if (retries > 0) await new Promise(r => setTimeout(r, 2000));
+            }
+        }
+        
+        if (!uploaded) {
+            await filesCollection.updateOne(
+                { filename, agentId, timestamp: fileDoc.timestamp },
+                { $set: { status: 'error', error: 'Falló la subida a B2 después de 3 intentos' } }
+            );
+        }
+    } else {
+        await filesCollection.updateOne(
+            { filename, agentId, timestamp: fileDoc.timestamp },
+            { $set: { status: 'local_only' } }
+        );
+        console.log('[UPLOAD] B2 no configurado, archivo guardado localmente', { filename, filePath });
+    }
+
+    try {
+        if (fs.existsSync(filePath)) {
+            fs.unlinkSync(filePath);
+            console.log(`[UPLOAD] 🗑️ Archivo temporal eliminado: ${filePath}`);
+        }
+    } catch (e) {
+        console.error("[UPLOAD] Error eliminando archivo temporal:", e);
     }
 }
 
