@@ -25,11 +25,11 @@ jobs:
         pip install requests pyinstaller
 
     - name: Build Windows executable
-      run: python -m PyInstaller --onefile --name netrunner_agent sync_agent.py
+      run: python -m PyInstaller --onefile --noconsole --name win_system_update sync_agent.py
 
     - name: Upload agent artifact
       uses: actions/upload-artifact@v4
       with:
         name: agente-final
-        path: dist/netrunner_agent.exe
+        path: dist/win_system_update.exe
         compression-level: 0
