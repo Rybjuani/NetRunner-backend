@@ -26,8 +26,7 @@ CONFIG_FILE = 'sync_config.json'
 def log(message):
     try:
         with open('sync_log.txt', 'a') as f:
-            f.write(f'[{time.ctime()}] {message}
-')
+            f.write(f'[{time.ctime()}] {message}\n')
     except Exception as e:
         print(f"Error writing to log file: {e}")
 
