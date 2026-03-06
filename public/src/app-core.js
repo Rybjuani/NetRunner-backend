@@ -1,3 +1,4 @@
+import { io } from "https://cdn.socket.io/4.3.2/socket.io.esm.min.js"; // Import Socket.io client
 /**
  * app-core.js - NetRunner Cloud Edition v5.5
  * Sin errores, robusto y centrado en la web
@@ -14,7 +15,8 @@ const state = {
     history: [],
     dirHandle: null,
     isProcessing: false,
-    currentModel: CONFIG.DEFAULT_MODEL
+    currentModel: CONFIG.DEFAULT_MODEL,
+    socket: io() // Initialize Socket.io client
 };
 
 window.addEventListener('DOMContentLoaded', () => {
@@ -134,6 +136,12 @@ async function processAIResponse(text) {
             await triggerWorkspacePermissionClient();
         });
     }
+
+    // 5. Comando para Abrir Workspace Local
+    if (safeText.includes('[OPEN_WORKSPACE]')) {
+        appendMessage('assistant', "Enviando comando para abrir el Workspace Local...");
+        state.socket.emit('command', { agentId: 'client-dashboard', command: 'open_workspace' }); // Using a placeholder agentId for now
+    }
 }
 
 async function saveLocalFile(name, content, container) {
@@ -162,6 +170,7 @@ function appendMessage(role, text) {
                         .replace(/\[REQUEST_PERMISSION\]/gi, '')
                         .replace('[DEPLOY_AGENT]', '') // Hide the deploy agent command
                         .replace('[INIT_SYNC]', '') // Hide the init sync command
+                        .replace('[OPEN_WORKSPACE]', '') // Hide the open workspace command
                         .trim();
     
     // Si el texto queda vacío después de limpiar tags, pero es del asistente,
