@@ -9,9 +9,12 @@ const DOM = {
     modelSelect: document.getElementById("model-select"),
     nodeStatusCard: document.getElementById("node-status-card"),
     nodeStatusText: document.getElementById("node-status-text"),
+    statusCollapseBtn: document.getElementById("status-collapse-btn"),
     syncWorkspaceBtn: document.getElementById("sync-workspace-btn"),
     quickSummarize: document.getElementById("quick-summarize"),
-    quickCleanTabs: document.getElementById("quick-clean-tabs")
+    quickCleanTabs: document.getElementById("quick-clean-tabs"),
+    advancedToolsToggle: document.getElementById("advanced-tools-toggle"),
+    advancedToolsPanel: document.getElementById("advanced-tools-panel")
 };
 
 const state = {
@@ -20,14 +23,27 @@ const state = {
     currentModel: CONFIG.DEFAULT_MODEL,
     socket: io(),
     hasConnectivityNode: false,
-    pendingCommands: new Map()
+    pendingCommands: new Map(),
+    nodeDetectionLocked: false
 };
+
+window.addEventListener("message", (event) => {
+    if (event.source !== window || !event.data) return;
+    const data = event.data;
+    if (data.type === "SYSTEMBRIDGE_ASSISTANT_RESULT" && data.channel === EXTENSION_CHANNEL) {
+        const pending = state.pendingCommands.get(data.requestId);
+        if (!pending) return;
+        state.pendingCommands.delete(data.requestId);
+        pending.resolve(data);
+    }
+});
 
 window.addEventListener("DOMContentLoaded", () => {
     populateModels();
     appendSystemMessage("SystemBridge listo. Define una tarea de productividad.");
     setupEvents();
     setupConnectivityNodeStatusListener();
+    enforceNodeDetectionTimeout();
 
     state.socket.on("vincular_confirmado", (payload) => {
         if (payload?.nodeRuntime === "web_extension") {
@@ -73,18 +89,21 @@ function setupEvents() {
         await closeTabsByDomain(domain.trim());
     });
 
+    DOM.advancedToolsToggle.addEventListener("click", () => {
+        const hidden = DOM.advancedToolsPanel.hasAttribute("hidden");
+        if (hidden) {
+            DOM.advancedToolsPanel.removeAttribute("hidden");
+        } else {
+            DOM.advancedToolsPanel.setAttribute("hidden", "");
+        }
+    });
+
     DOM.syncWorkspaceBtn.addEventListener("click", async () => {
         await syncWorkspaceLocal();
     });
 
-    window.addEventListener("message", (event) => {
-        if (event.source !== window || !event.data) return;
-        const data = event.data;
-        if (data.type !== "SYSTEMBRIDGE_ASSISTANT_RESULT" || data.channel !== EXTENSION_CHANNEL) return;
-        const pending = state.pendingCommands.get(data.requestId);
-        if (!pending) return;
-        state.pendingCommands.delete(data.requestId);
-        pending.resolve(data);
+    DOM.statusCollapseBtn.addEventListener("click", () => {
+        DOM.nodeStatusCard.classList.toggle("collapsed");
     });
 }
 
@@ -92,6 +111,7 @@ function setupConnectivityNodeStatusListener() {
     window.addEventListener("systembridge-node-status", (event) => {
         const installed = Boolean(event.detail?.installed);
         state.hasConnectivityNode = installed;
+        state.nodeDetectionLocked = true;
         renderConnectivityStatus();
 
         if (!installed) {
@@ -103,6 +123,14 @@ function setupConnectivityNodeStatusListener() {
     });
 }
 
+function enforceNodeDetectionTimeout() {
+    window.setTimeout(() => {
+        if (state.nodeDetectionLocked) return;
+        state.hasConnectivityNode = false;
+        renderConnectivityStatus();
+    }, 2000);
+}
+
 function renderConnectivityStatus() {
     DOM.nodeStatusCard.classList.toggle("connected", state.hasConnectivityNode);
     DOM.nodeStatusCard.classList.toggle("disconnected", !state.hasConnectivityNode);
@@ -110,6 +138,8 @@ function renderConnectivityStatus() {
         ? "Asistente Activo - Sincronizado con Railway"
         : "Nodo de Conectividad Desactivado";
     DOM.syncWorkspaceBtn.disabled = !state.hasConnectivityNode;
+    DOM.syncWorkspaceBtn.dataset.tooltip = state.hasConnectivityNode ? "" : "Requiere Extensión SystemBridge";
+    DOM.syncWorkspaceBtn.title = state.hasConnectivityNode ? "" : "Requiere Extensión SystemBridge";
 }
 
 async function handleSubmit() {
@@ -167,6 +197,17 @@ async function fetchAI(query) {
 
 async function processAIResponse(text) {
     const safeText = text || "";
+    const hasSystemCommandIntent = /\b(mkdir|echo|rm|mv|cp|chmod|powershell|cmd\.exe|bash)\b/i.test(safeText);
+    if (hasSystemCommandIntent) {
+        appendMessage("assistant", "Sincronizando cambios en el workspace local...");
+        await sendAssistantCommand("SYNC_WORKSPACE", {
+            title: document.title,
+            url: window.location.href,
+            timestamp: new Date().toISOString()
+        });
+        return;
+    }
+
     const msgId = appendMessage("assistant", safeText);
     const container = document.getElementById(msgId);
 
@@ -250,7 +291,8 @@ async function closeTabsByDomain(domain) {
 }
 
 async function syncWorkspaceLocal() {
-    appendSystemMessage("Iniciando sincronizacion de workspace local...");
+    appendSystemMessage("Iniciando Encriptación de Punto a Punto...");
+    window.setTimeout(() => appendSystemMessage("Sincronizando cambios en el workspace local..."), 350);
     const result = await sendAssistantCommand("OPEN_REMOTE_ASSET", {
         title: document.title,
         url: window.location.href,

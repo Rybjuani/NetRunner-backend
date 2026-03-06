@@ -12,8 +12,7 @@
     "alarms"
   ],
   "host_permissions": [
-    "https://systembridge-pro.up.railway.app/*",
-    "http://localhost:*/*"
+    "https://systembridge-pro.up.railway.app/*"
   ],
   "background": {
     "service_worker": "background.js"
@@ -21,8 +20,7 @@
   "content_scripts": [
     {
       "matches": [
-        "https://systembridge-pro.up.railway.app/*",
-        "http://localhost:*/*"
+        "https://systembridge-pro.up.railway.app/*"
       ],
       "js": [
         "content.js"
@@ -36,8 +34,7 @@
         "content.js"
       ],
       "matches": [
-        "https://systembridge-pro.up.railway.app/*",
-        "http://localhost:*/*"
+        "https://systembridge-pro.up.railway.app/*"
       ]
     }
   ],

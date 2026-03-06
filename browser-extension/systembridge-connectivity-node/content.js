@@ -268,6 +268,7 @@ window.addEventListener("message", (event) => {
   if (event.source !== window || !event.data) return;
 
   if (event.data.type === "SYSTEMBRIDGE_NODE_PING" && event.data.channel === CHANNEL) {
+    // Respond immediately so frontend can enable bridge-dependent actions quickly.
     sendPresenceSignal();
     return;
   }

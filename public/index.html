@@ -35,6 +35,9 @@
                     <p class="status-label">Anillo de Estado</p>
                     <p id="node-status-text" class="status-value">Nodo de Conectividad Desactivado</p>
                 </div>
+                <button id="status-collapse-btn" class="status-collapse-btn" type="button" aria-label="Colapsar estado">
+                    <i class="fa-solid fa-chevron-up"></i>
+                </button>
             </div>
             <button id="sync-workspace-btn" class="sync-btn" disabled>
                 <i class="fa-solid fa-wand-magic-sparkles"></i>
@@ -61,6 +64,12 @@
                     <i class="fa-regular fa-file-lines"></i>
                     <span>Resumir Pagina</span>
                 </button>
+                <button id="advanced-tools-toggle" class="quick-btn" type="button">
+                    <i class="fa-solid fa-gear"></i>
+                    <span>Herramientas Avanzadas</span>
+                </button>
+            </div>
+            <div id="advanced-tools-panel" class="advanced-tools-panel" hidden>
                 <button id="quick-clean-tabs" class="quick-btn" type="button">
                     <i class="fa-solid fa-broom"></i>
                     <span>Limpiar Pestanas</span>

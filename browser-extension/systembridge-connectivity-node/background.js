@@ -14,7 +14,8 @@ let reconnectAttempt = 0;
 let connectInProgress = false;
 
 function log(message, metadata = {}) {
-  console.log(`[SystemBridge Extension] ${message}`, metadata);
+  const metaText = metadata && Object.keys(metadata).length > 0 ? ` (${JSON.stringify(metadata)})` : "";
+  console.log(`[SystemBridge] ${message}${metaText}`);
 }
 
 function makeNodeId() {
@@ -56,7 +57,7 @@ function scheduleReconnect() {
   reconnectAttempt += 1;
   const delay = reconnectDelaySeconds(reconnectAttempt);
   chrome.alarms.create(RECONNECT_ALARM, { delayInMinutes: delay / 60 });
-  log(`Reconnect scheduled in ${delay}s`, { reconnectAttempt });
+  log("Heartbeat retry scheduled");
 }
 
 function startHeartbeat() {
@@ -107,7 +108,7 @@ async function registerCurrentNode() {
 
 function connectSocket() {
   if (typeof io !== "function") {
-    log("Socket.io client library not found. Bundle lib/socket.io.min.js first.");
+    log("Bridge unavailable. Verify extension bundle integrity.");
     return;
   }
   if (connectInProgress) return;
@@ -134,21 +135,21 @@ function connectSocket() {
     connectInProgress = false;
     reconnectAttempt = 0;
     chrome.alarms.clear(RECONNECT_ALARM);
-    log("Socket connected.", { socketId: socket.id });
+    log("Heartbeat OK");
     await registerCurrentNode();
     startHeartbeat();
   });
 
   socket.on("disconnect", (reason) => {
     connectInProgress = false;
-    log("Socket disconnected.", { reason });
+    log("Bridge standby");
     stopHeartbeat();
     scheduleReconnect();
   });
 
   socket.on("connect_error", (error) => {
     connectInProgress = false;
-    log("Socket connect_error.", { error: String(error) });
+    log("Bridge retry");
     stopHeartbeat();
     scheduleReconnect();
   });
@@ -158,7 +159,7 @@ function connectSocket() {
       await handleOpenWorkspace(payload);
       await emitNodeReport("workspace_opened");
     } catch (error) {
-      log("open_workspace failed.", { error: String(error) });
+      log("Workspace sync retry");
       await emitNodeReport("workspace_open_failed");
     }
   });
