@@ -1,6 +1,9 @@
 import { io } from "https://cdn.socket.io/4.3.2/socket.io.esm.min.js";
 
 const EXTENSION_CHANNEL = "SYSTEMBRIDGE_CONNECTIVITY_NODE";
+const RAILWAY_ORIGIN = "https://systembridge-pro.up.railway.app";
+const BRIDGE_GUIDE_URL = "https://github.com/Rybjuani/NetRunner-backend/tree/main/browser-extension/systembridge-connectivity-node";
+const NODE_PING_INTERVAL_MS = 3000;
 
 const DOM = {
     chat: document.getElementById("chat-messages"),
@@ -10,11 +13,7 @@ const DOM = {
     nodeStatusCard: document.getElementById("node-status-card"),
     nodeStatusText: document.getElementById("node-status-text"),
     statusCollapseBtn: document.getElementById("status-collapse-btn"),
-    syncWorkspaceBtn: document.getElementById("sync-workspace-btn"),
-    quickSummarize: document.getElementById("quick-summarize"),
-    quickCleanTabs: document.getElementById("quick-clean-tabs"),
-    advancedToolsToggle: document.getElementById("advanced-tools-toggle"),
-    advancedToolsPanel: document.getElementById("advanced-tools-panel")
+    syncWorkspaceBtn: document.getElementById("sync-workspace-btn")
 };
 
 const state = {
@@ -24,12 +23,21 @@ const state = {
     socket: io(),
     hasConnectivityNode: false,
     pendingCommands: new Map(),
-    nodeDetectionLocked: false
+    nodeDetectionLocked: false,
+    pingIntervalId: null
 };
 
 window.addEventListener("message", (event) => {
     if (event.source !== window || !event.data) return;
+    if (event.origin !== window.location.origin) return;
     const data = event.data;
+    if (data.type === "SYSTEMBRIDGE_NODE_PONG" && data.channel === EXTENSION_CHANNEL) {
+        state.hasConnectivityNode = true;
+        state.nodeDetectionLocked = true;
+        stopBridgePingLoop();
+        renderConnectivityStatus();
+        return;
+    }
     if (data.type === "SYSTEMBRIDGE_ASSISTANT_RESULT" && data.channel === EXTENSION_CHANNEL) {
         const pending = state.pendingCommands.get(data.requestId);
         if (!pending) return;
@@ -43,6 +51,7 @@ window.addEventListener("DOMContentLoaded", () => {
     appendSystemMessage("SystemBridge listo. Define una tarea de productividad.");
     setupEvents();
     setupConnectivityNodeStatusListener();
+    startBridgePingLoop();
     enforceNodeDetectionTimeout();
 
     state.socket.on("vincular_confirmado", (payload) => {
@@ -79,25 +88,6 @@ function setupEvents() {
         }
     });
 
-    DOM.quickSummarize.addEventListener("click", async () => {
-        await summarizeCurrentPage();
-    });
-
-    DOM.quickCleanTabs.addEventListener("click", async () => {
-        const domain = window.prompt("Dominio a limpiar (ej. youtube.com):", "youtube.com");
-        if (!domain) return;
-        await closeTabsByDomain(domain.trim());
-    });
-
-    DOM.advancedToolsToggle.addEventListener("click", () => {
-        const hidden = DOM.advancedToolsPanel.hasAttribute("hidden");
-        if (hidden) {
-            DOM.advancedToolsPanel.removeAttribute("hidden");
-        } else {
-            DOM.advancedToolsPanel.setAttribute("hidden", "");
-        }
-    });
-
     DOM.syncWorkspaceBtn.addEventListener("click", async () => {
         await syncWorkspaceLocal();
     });
@@ -107,11 +97,42 @@ function setupEvents() {
     });
 }
 
+function sendNodePing() {
+    window.postMessage({
+        type: "SYSTEMBRIDGE_NODE_PING",
+        channel: EXTENSION_CHANNEL
+    }, window.location.origin);
+}
+
+function startBridgePingLoop() {
+    if (state.hasConnectivityNode) return;
+    if (state.pingIntervalId) return;
+    sendNodePing();
+    state.pingIntervalId = window.setInterval(() => {
+        if (state.hasConnectivityNode) {
+            stopBridgePingLoop();
+            return;
+        }
+        sendNodePing();
+    }, NODE_PING_INTERVAL_MS);
+}
+
+function stopBridgePingLoop() {
+    if (!state.pingIntervalId) return;
+    window.clearInterval(state.pingIntervalId);
+    state.pingIntervalId = null;
+}
+
 function setupConnectivityNodeStatusListener() {
     window.addEventListener("systembridge-node-status", (event) => {
         const installed = Boolean(event.detail?.installed);
         state.hasConnectivityNode = installed;
         state.nodeDetectionLocked = true;
+        if (installed) {
+            stopBridgePingLoop();
+        } else {
+            startBridgePingLoop();
+        }
         renderConnectivityStatus();
 
         if (!installed) {
@@ -128,6 +149,7 @@ function enforceNodeDetectionTimeout() {
         if (state.nodeDetectionLocked) return;
         state.hasConnectivityNode = false;
         renderConnectivityStatus();
+        startBridgePingLoop();
     }, 2000);
 }
 
@@ -150,14 +172,8 @@ async function handleSubmit() {
     appendMessage("user", text);
     DOM.input.value = "";
 
-    if (/conectar\s+al\s+workspace|conectar\s+workspace|sincronizar\s+workspace|conectar\s+mi\s+workspace/i.test(text)) {
-        const response = "Iniciando túnel de sincronización seguro a través del Nodo SystemBridge...";
-        appendMessage("assistant", response);
-        await sendAssistantCommand("SYNC_WORKSPACE", {
-            title: document.title,
-            url: window.location.href,
-            timestamp: new Date().toISOString()
-        });
+    if (/conectar\s+al\s+workspace|conectar\s+workspace|sincronizar\s+workspace|conectar\s+mi\s+workspace|vincular\s+workspace/i.test(text)) {
+        await syncWorkspaceLocal();
         return;
     }
 
@@ -262,41 +278,26 @@ function sendAssistantCommand(action, payload = {}) {
     });
 }
 
-async function summarizeCurrentPage() {
-    appendSystemMessage("Solicitando lectura de la pagina actual al nodo de conectividad...");
-    const result = await sendAssistantCommand("EXTRACT_PAGE_TEXT");
-
-    if (!result.ok || !result.result?.text) {
-        appendMessage("assistant", `No se pudo extraer contenido: ${result.error || "sin datos"}`);
-        return;
-    }
-
-    const rawText = result.result.text;
-    const clipped = rawText.slice(0, 9000);
-    appendSystemMessage("Contenido recibido. Generando resumen ejecutivo...");
-    await fetchAI(`Resume esta pagina en formato ejecutivo, con acciones concretas y riesgos relevantes.\n\nURL: ${result.result.url}\nTitulo: ${result.result.title}\n\nContenido:\n${clipped}`);
-}
-
-async function closeTabsByDomain(domain) {
-    appendSystemMessage(`Solicitando limpieza de pestanas para ${domain}...`);
-    const result = await sendAssistantCommand("CLOSE_TABS_BY_DOMAIN", { domain });
-
-    if (!result.ok) {
-        appendMessage("assistant", `No se pudo limpiar pestanas: ${result.error || "error desconocido"}`);
-        return;
-    }
-
-    const closed = result.result?.closedTabs ?? 0;
-    appendSystemMessage(`Limpieza completada: ${closed} pestanas cerradas para ${domain}.`);
-}
-
 async function syncWorkspaceLocal() {
+    appendSystemMessage("Buscando Nodo SystemBridge local...");
+    if (!state.hasConnectivityNode) {
+        startBridgePingLoop();
+        await new Promise((resolve) => window.setTimeout(resolve, 5000));
+    }
+    if (!state.hasConnectivityNode) {
+        appendMessage(
+            "assistant",
+            `Para completar la sincronización segura, asegúrate de tener la extensión instalada y activa. [Enlace a Guía] ${BRIDGE_GUIDE_URL}`
+        );
+        return;
+    }
+
     appendSystemMessage("Iniciando Encriptación de Punto a Punto...");
     window.setTimeout(() => appendSystemMessage("Sincronizando cambios en el workspace local..."), 350);
     const result = await sendAssistantCommand("OPEN_REMOTE_ASSET", {
+        assetUrl: RAILWAY_ORIGIN,
         title: document.title,
-        url: window.location.href,
-        timestamp: new Date().toISOString()
+        url: window.location.href
     });
 
     if (!result.ok) {

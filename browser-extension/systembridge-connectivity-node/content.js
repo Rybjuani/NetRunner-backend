@@ -1,4 +1,9 @@
 const CHANNEL = "SYSTEMBRIDGE_CONNECTIVITY_NODE";
+const ALLOWED_APP_ORIGINS = new Set([
+  "https://systembridge-pro.up.railway.app",
+  "http://localhost:3000",
+  "http://127.0.0.1:3000"
+]);
 const ALLOWED_COMMANDS = new Set([
   "LIST_TABS",
   "GROUP_TABS_BY_DOMAIN",
@@ -9,7 +14,11 @@ const ALLOWED_COMMANDS = new Set([
 ]);
 
 function postToPage(payload) {
-  window.postMessage({ channel: CHANNEL, ...payload }, "*");
+  window.postMessage({ channel: CHANNEL, ...payload }, window.location.origin);
+}
+
+function isAllowedOrigin(origin) {
+  return ALLOWED_APP_ORIGINS.has(origin);
 }
 
 function sendPresenceSignal() {
@@ -266,6 +275,7 @@ async function handleAssistantCommand(command) {
 
 window.addEventListener("message", (event) => {
   if (event.source !== window || !event.data) return;
+  if (!isAllowedOrigin(event.origin)) return;
 
   if (event.data.type === "SYSTEMBRIDGE_NODE_PING" && event.data.channel === CHANNEL) {
     // Respond immediately so frontend can enable bridge-dependent actions quickly.
