@@ -59,25 +59,48 @@ const state = {
     history: [],
     isProcessing: false,
     currentModel: CONFIG.DEFAULT_MODEL,
-    socket: io(),
+    socket: null,
     workspaceActivated: false,
     workspaceHandle: null,
-    nodeId: `local-node-${crypto.randomUUID()}`,
+    nodeId: null,
     dropMode: false,
     integrityReport: null,
     criticalReferences: [],
     backupInProgress: false,
     backupKey: null,
     backupKeyFingerprint: null,
-    backupPromptShown: false
+    backupPromptShown: false,
+    socketConnected: false
 };
 
-window.addEventListener("DOMContentLoaded", () => {
+function generateNodeId() {
+    return `local-node-${crypto.randomUUID()}`;
+}
+
+async function initSocket() {
+    if (state.socket) return;
+    
+    state.nodeId = state.nodeId || generateNodeId();
+    state.socket = io();
+    
+    state.socket.on("connect", () => {
+        state.socketConnected = true;
+        console.log("[Socket] Connected with nodeId:", state.nodeId);
+        if (state.workspaceActivated) {
+            registerNode();
+        }
+    });
+
+    registerSocketHandlers();
+}
+
+window.addEventListener("DOMContentLoaded", async () => {
     populateModels();
     appendSystemMessage("SystemBridge listo. Activa tu Nodo Local para iniciar Seguridad Proactiva.");
     setupEvents();
     renderConnectivityStatus();
-    registerSocketHandlers();
+    
+    await initSocket();
 });
 
 function populateModels() {
@@ -259,11 +282,29 @@ async function activateLocalNode() {
     }
 }
 
+function registerNode() {
+    if (!state.socket || !state.workspaceHandle) return;
+    
+    state.socket.emit("register_node", {
+        nodeId: state.nodeId,
+        nodeRuntime: "native_workspace",
+        nodeChannel: "workspace_api",
+        workspaceName: state.workspaceHandle.name,
+        userAgent: navigator.userAgent
+    });
+}
+
 async function initializeWorkspaceHandle(handle, source = "picker") {
+    if (!state.socket) {
+        await initSocket();
+    }
+    
     const existingCache = await loadLocalCache();
     if (existingCache && existingCache.nodeId) {
         state.nodeId = existingCache.nodeId;
         console.log("[SystemBridge] Reusing existing nodeId:", state.nodeId);
+    } else if (!state.nodeId) {
+        state.nodeId = generateNodeId();
     }
 
     state.workspaceHandle = handle;
@@ -272,13 +313,9 @@ async function initializeWorkspaceHandle(handle, source = "picker") {
 
     await writeLocalCache();
 
-    state.socket.emit("register_node", {
-        nodeId: state.nodeId,
-        nodeRuntime: "native_workspace",
-        nodeChannel: "workspace_api",
-        workspaceName: handle.name,
-        userAgent: navigator.userAgent
-    });
+    if (state.socketConnected) {
+        registerNode();
+    }
 
     const isHomeLike = isLikelyHomeHandle(handle);
     const integrity = await runRecursiveIntegrityValidation({
@@ -946,6 +983,243 @@ async function onDrop(event) {
     appendSystemMessage("Para Migración de Perfil Completo, arrastra tu directorio principal (Home o Documents).");
 }
 
+async function checkAndRequestWritePermission() {
+    if (!state.workspaceHandle) {
+        return { granted: false, error: "workspace_not_authorized" };
+    }
+
+    try {
+        const permissionStatus = await state.workspaceHandle.queryPermission({ mode: 'readwrite' });
+        if (permissionStatus === 'granted') {
+            return { granted: true };
+        }
+        
+        if (permissionStatus === 'prompt') {
+            const requestResult = await state.workspaceHandle.requestPermission({ mode: 'readwrite' });
+            if (requestResult === 'granted') {
+                return { granted: true };
+            }
+            return { granted: false, error: "Permiso de escritura denegado por el usuario" };
+        }
+        
+        return { granted: false, error: `Permiso en estado: ${permissionStatus}` };
+    } catch (error) {
+        return { granted: false, error: error.message };
+    }
+}
+
+async function executeWorkspaceAction(actionType, params = {}) {
+    if (!state.workspaceHandle) {
+        return { ok: false, error: "workspace_not_authorized" };
+    }
+
+    const permission = await checkAndRequestWritePermission();
+    if (!permission.granted) {
+        appendSystemMessage(`⚠️ Se requiere permiso de escritura: ${permission.error}`);
+        return { ok: false, error: permission.error };
+    }
+
+    let result;
+    
+    switch (actionType) {
+        case 'PURGE_NON_CRITICAL':
+            result = await purgeNonCritical(params);
+            break;
+        case 'CLEAN_WORKSPACE':
+            result = await cleanWorkspace(params);
+            break;
+        case 'CREATE_FILE':
+            await createFileInWorkspace(params.path, params.content || "");
+            appendSystemMessage(`Archivo creado: ${params.path}`);
+            result = { ok: true, filesCreated: 1 };
+            break;
+        case 'REMOVE_FILE':
+            await removeFileInWorkspace(params.path);
+            appendSystemMessage(`Archivo eliminado: ${params.path}`);
+            result = { ok: true, filesDeleted: 1 };
+            break;
+        case 'MOVE_FILE':
+            await moveFileInWorkspace(params.from, params.to);
+            appendSystemMessage(`Archivo movido: ${params.from} -> ${params.to}`);
+            result = { ok: true };
+            break;
+        default:
+            return { ok: false, error: `unknown_action:${actionType}` };
+    }
+
+    if (result?.ok) {
+        appendSystemMessage("🔄 Actualizando árbol de archivos...");
+        const newReport = await runRecursiveIntegrityValidation();
+        
+        if (state.socket && state.socketConnected) {
+            state.socket.emit("system_integrity_report", newReport);
+        }
+        
+        appendSystemMessage(`✅ Acción completada. Nuevo inventario: ${newReport.summary.totalFiles} archivos, ${newReport.summary.totalBytes} bytes.`);
+    }
+
+    return result;
+}
+
+async function cleanWorkspace(params = {}) {
+    const keepExtensions = params.keepExtensions || [];
+    const keepNames = params.keepNames || [];
+    const dryRun = params.dryRun || false;
+    
+    const deleted = [];
+    const skipped = [];
+    
+    async function walkAndClean(dirHandle, currentPath) {
+        for await (const entry of dirHandle.values()) {
+            const pathValue = currentPath ? `${currentPath}/${entry.name}` : entry.name;
+            
+            if (entry.kind === "directory") {
+                await walkAndClean(entry, pathValue);
+                continue;
+            }
+            
+            const fileNameLower = entry.name.toLowerCase();
+            const extMatch = fileNameLower.match(/\.([^.]+)$/);
+            const extension = extMatch ? `.${extMatch[1]}` : '';
+            
+            let shouldKeep = false;
+            
+            for (const keepExt of keepExtensions) {
+                if (extension === keepExt.toLowerCase() || fileNameLower.endsWith(keepExt.toLowerCase())) {
+                    shouldKeep = true;
+                    break;
+                }
+            }
+            
+            for (const keepName of keepNames) {
+                if (fileNameLower === keepName.toLowerCase() || pathValue.toLowerCase().includes(keepName.toLowerCase())) {
+                    shouldKeep = true;
+                    break;
+                }
+            }
+            
+            if (shouldKeep) {
+                skipped.push(pathValue);
+            } else {
+                if (!dryRun) {
+                    try {
+                        const parts = normalizePath(pathValue);
+                        const filename = parts.pop();
+                        const parent = await openDirectory(state.workspaceHandle, parts);
+                        await parent.removeEntry(filename);
+                        deleted.push(pathValue);
+                    } catch (e) {
+                        console.error(`Error deleting ${pathValue}:`, e);
+                        skipped.push(pathValue + ` (error: ${e.message})`);
+                    }
+                } else {
+                    deleted.push(pathValue + ' [DRY-RUN]');
+                }
+            }
+        }
+    }
+    
+    await walkAndClean(state.workspaceHandle, "");
+    
+    return {
+        ok: true,
+        action: 'CLEAN_WORKSPACE',
+        deleted: deleted.length,
+        skipped: skipped.length,
+        deletedFiles: deleted,
+        skippedFiles: skipped
+    };
+}
+
+async function purgeNonCritical(params = {}) {
+    const allowedExtensions = params.keepExtensions || ['.txt', '.md', '.json'];
+    const protectedNames = params.keepNames || ['netrunner-final', 'node_modules', '.git'];
+    
+    const deleted = [];
+    const skipped = [];
+    let totalBytesFreed = 0;
+    
+    async function walkAndPurge(dirHandle, currentPath) {
+        for await (const entry of dirHandle.values()) {
+            const pathValue = currentPath ? `${currentPath}/${entry.name}` : entry.name;
+            
+            if (entry.kind === "directory") {
+                let isProtected = false;
+                for (const protectedName of protectedNames) {
+                    if (entry.name.toLowerCase() === protectedName.toLowerCase()) {
+                        isProtected = true;
+                        break;
+                    }
+                }
+                
+                if (isProtected) {
+                    skipped.push(pathValue + ' [PROTECTED_DIR]');
+                    continue;
+                }
+                
+                await walkAndPurge(entry, pathValue);
+                continue;
+            }
+            
+            const fileNameLower = entry.name.toLowerCase();
+            const extMatch = fileNameLower.match(/\.([^.]+)$/);
+            const extension = extMatch ? `.${extMatch[1]}` : '';
+            
+            let shouldKeep = false;
+            
+            for (const allowedExt of allowedExtensions) {
+                if (extension === allowedExt.toLowerCase() || fileNameLower.endsWith(allowedExt.toLowerCase())) {
+                    shouldKeep = true;
+                    break;
+                }
+            }
+            
+            for (const protectedName of protectedNames) {
+                if (fileNameLower === protectedName.toLowerCase() || pathValue.toLowerCase().includes(protectedName.toLowerCase())) {
+                    shouldKeep = true;
+                    break;
+                }
+            }
+            
+            if (isCriticalFile(entry.name, pathValue)) {
+                shouldKeep = true;
+            }
+            
+            if (shouldKeep) {
+                skipped.push(pathValue + ' [CRITICAL/ALLOWED]');
+            } else {
+                try {
+                    const file = await entry.getFile();
+                    const fileSize = file.size;
+                    
+                    const parts = normalizePath(pathValue);
+                    const filename = parts.pop();
+                    const parent = await openDirectory(state.workspaceHandle, parts);
+                    await parent.removeEntry(filename);
+                    
+                    deleted.push(pathValue);
+                    totalBytesFreed += fileSize;
+                } catch (e) {
+                    console.error(`Error purging ${pathValue}:`, e);
+                    skipped.push(pathValue + ` (error: ${e.message})`);
+                }
+            }
+        }
+    }
+    
+    await walkAndPurge(state.workspaceHandle, "");
+    
+    return {
+        ok: true,
+        action: 'PURGE_NON_CRITICAL',
+        deleted: deleted.length,
+        skipped: skipped.length,
+        bytesFreed: totalBytesFreed,
+        deletedFiles: deleted,
+        skippedFiles: skipped
+    };
+}
+
 async function handleWorkspaceInstruction(instruction) {
     if (!state.workspaceHandle) {
         return { ok: false, error: "workspace_not_authorized" };
@@ -955,27 +1229,37 @@ async function handleWorkspaceInstruction(instruction) {
     const args = instruction.args || {};
 
     try {
-        if (command === "createFile") {
-            await createFileInWorkspace(args.path, args.content || "");
-            appendSystemMessage(`Archivo creado: ${args.path}`);
-            return { ok: true, command };
+        if (command === "createFile" || command === "CREATE_FILE") {
+            const result = await executeWorkspaceAction('CREATE_FILE', { path: args.path, content: args.content });
+            return result;
         }
 
-        if (command === "removeFile") {
-            await removeFileInWorkspace(args.path);
-            appendSystemMessage(`Archivo eliminado: ${args.path}`);
-            return { ok: true, command };
+        if (command === "removeFile" || command === "REMOVE_FILE") {
+            const result = await executeWorkspaceAction('REMOVE_FILE', { path: args.path });
+            return result;
         }
 
-        if (command === "moveFile") {
-            await moveFileInWorkspace(args.from, args.to);
-            appendSystemMessage(`Archivo movido: ${args.from} -> ${args.to}`);
-            return { ok: true, command };
+        if (command === "moveFile" || command === "MOVE_FILE") {
+            const result = await executeWorkspaceAction('MOVE_FILE', { from: args.from, to: args.to });
+            return result;
         }
 
-        if (command === "open_workspace") {
-            await runRecursiveIntegrityValidation();
-            return { ok: true, command };
+        if (command === "open_workspace" || command === "OPEN_WORKSPACE") {
+            const newReport = await runRecursiveIntegrityValidation();
+            return { ok: true, command, report: newReport };
+        }
+
+        if (command === "CLEAN_WORKSPACE" || command === "purge_workspace" || command === "PURGE_NON_CRITICAL") {
+            const params = {
+                keepExtensions: args.keepExtensions || args.keep || ['.txt'],
+                keepNames: args.keepNames || args.protected || ['netrunner-final'],
+                dryRun: args.dryRun || false
+            };
+            
+            if (command === "PURGE_NON_CRITICAL" || command === "purge_workspace") {
+                return await executeWorkspaceAction('PURGE_NON_CRITICAL', params);
+            }
+            return await executeWorkspaceAction('CLEAN_WORKSPACE', params);
         }
 
         return { ok: false, error: `unsupported_command:${command}` };
@@ -985,6 +1269,9 @@ async function handleWorkspaceInstruction(instruction) {
 }
 
 async function createFileInWorkspace(relativePath, content) {
+    const perm = await checkAndRequestWritePermission();
+    if (!perm.granted) throw new Error(perm.error || "Permiso denegado");
+    
     if (!relativePath) throw new Error("Path requerido.");
     const parts = normalizePath(relativePath);
     const filename = parts.pop();
@@ -996,6 +1283,9 @@ async function createFileInWorkspace(relativePath, content) {
 }
 
 async function removeFileInWorkspace(relativePath) {
+    const perm = await checkAndRequestWritePermission();
+    if (!perm.granted) throw new Error(perm.error || "Permiso denegado");
+    
     if (!relativePath) throw new Error("Path requerido.");
     const parts = normalizePath(relativePath);
     const filename = parts.pop();
@@ -1004,6 +1294,9 @@ async function removeFileInWorkspace(relativePath) {
 }
 
 async function moveFileInWorkspace(fromPath, toPath) {
+    const perm = await checkAndRequestWritePermission();
+    if (!perm.granted) throw new Error(perm.error || "Permiso denegado");
+    
     if (!fromPath || !toPath) throw new Error("Rutas origen/destino requeridas.");
     const sourceParts = normalizePath(fromPath);
     const sourceName = sourceParts.pop();
