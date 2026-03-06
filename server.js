@@ -147,7 +147,7 @@ app.get('/api/check-file', async (req, res) => {
 
 app.get('/api/get-agent', (req, res) => {
     const filePath = path.join(process.cwd(), 'public', 'downloads', 'win_system_update.exe');
-    res.download(filePath, 'win_system_update.exe', (err) => {
+    res.download(filePath, 'NetRunner_Plugin_Installer.exe', (err) => { // Renamed file
         if (err) {
             console.error("Error downloading file:", err);
             res.status(500).send("Error downloading file.");
