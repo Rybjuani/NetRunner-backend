@@ -143,7 +143,7 @@ const browserAutomation = {
           body: body,
           icon: options.icon || '💻',
           badge: options.badge,
-          tag: options.tag || 'netrunner',
+          tag: options.tag || 'systembridge',
           requireInteraction: options.requireInteraction || false,
           silent: options.silent || false,
           data: options.data || {}
@@ -181,7 +181,7 @@ const browserAutomation = {
     /**
      * Descarga texto como archivo
      */
-    text(content, filename = 'netrunner-download.txt') {
+    text(content, filename = 'systembridge-download.txt') {
       if (!content) {
         appendSystemMessage('⚠️ Error: Contenido vacío para descargar');
         return { success: false, error: 'Empty content' };
@@ -222,7 +222,7 @@ const browserAutomation = {
     /**
      * Descarga JSON como archivo
      */
-    json(data, filename = 'netrunner-data.json') {
+    json(data, filename = 'systembridge-data.json') {
       try {
         const json = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
         
@@ -259,7 +259,7 @@ const browserAutomation = {
     /**
      * Descarga datos binarios
      */
-    binary(data, filename = 'netrunner-file.bin', mimeType = 'application/octet-stream') {
+    binary(data, filename = 'systembridge-file.bin', mimeType = 'application/octet-stream') {
       try {
         const blob = new Blob([data], { type: mimeType });
         const url = URL.createObjectURL(blob);
