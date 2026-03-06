@@ -208,6 +208,11 @@ async function handleSubmit() {
     appendMessage("user", text);
     DOM.input.value = "";
 
+    if (detectUserNeedsHelp(text) && !state.workspaceActivated) {
+        showHelpWizard();
+        return;
+    }
+
     if (/activar\s+nodo|conectar\s+workspace|sincronizar\s+workspace|vincular\s+workspace/i.test(text)) {
         await activateLocalNode();
         return;
@@ -215,6 +220,16 @@ async function handleSubmit() {
 
     if (/respaldo|backup|recuperacion de desastres|iniciar respaldo/i.test(text)) {
         await startPredictiveBackup();
+        return;
+    }
+
+    if (/limpia|borra|elimina|basura/i.test(text) && state.workspaceActivated) {
+        await executeWorkspaceAction('PURGE_NON_CRITICAL', { keepExtensions: ['.txt', '.md', '.json'], keepNames: ['netrunner-final'] });
+        return;
+    }
+
+    if (/organiza|clasifica|fotos|videos|multimedia/i.test(text) && state.workspaceActivated) {
+        await executeWorkspaceAction('SMART_ORGANIZE', {});
         return;
     }
 
@@ -360,6 +375,8 @@ async function initializeWorkspaceHandle(handle, source = "picker") {
 
     appendSystemMessage(`Nodo Local activado en "${handle.name}".`);
     appendSystemMessage(`Validacion de Integridad de Sistema: ${integrity.summary.totalFiles} archivos, ${integrity.summary.totalDirs} directorios, ${formatBytes(integrity.summary.totalBytes)}${criticalInfo}.`);
+    
+    showIntegritySummary(handle.name, integrity.summary);
 
     if (!references.looksHome && references.found.length < 2) {
         appendSystemMessage("Para una optimización completa y sincronización de referencias críticas (.bashrc, .ssh, .aws), arrastra aquí tu carpeta personal (Home).");
@@ -1966,6 +1983,73 @@ function appendSystemMessage(text) {
     div.textContent = text;
     DOM.chat.appendChild(div);
     DOM.chat.scrollTop = DOM.chat.scrollHeight;
+}
+
+function showHelpWizard() {
+    const msgId = appendMessage("assistant", `🌟 **Estas son las cosas que puedo hacer por ti:**`);
+    const container = document.getElementById(msgId);
+    if (!container) return;
+    
+    const capabilities = [
+        { icon: "📸", title: "Organizar Fotos y Videos", desc: "Clasifico tus archivos multimedia automaticamente" },
+        { icon: "🔐", title: "Respaldo Seguro", desc: "Guardo tus archivos importantes en la nube (B2)" },
+        { icon: "🧹", title: "Limpieza Inteligente", desc: "Elimino archivos basura automaticamente" },
+        { icon: "📂", title: "Gestionar Archivos", desc: "Crear, renombrar, mover o eliminar" },
+        { icon: "📝", title: "Leer Notas", desc: "Leo tus archivos de texto y te ayudo con ellos" },
+        { icon: "🔍", title: "Buscar Archivos", desc: "Encuentra archivos en tu computadora" }
+    ];
+    
+    const grid = document.createElement("div");
+    grid.className = "capability-grid";
+    grid.style.cssText = "display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-top: 12px;";
+    
+    capabilities.forEach(cap => {
+        const card = document.createElement("div");
+        card.className = "capability-card";
+        card.style.cssText = "background: rgba(0,242,254,0.08); border: 1px solid rgba(0,242,254,0.2); border-radius: 10px; padding: 12px; cursor: pointer; transition: all 0.2s;";
+        card.innerHTML = `<div style="font-size: 24px; margin-bottom: 6px;">${cap.icon}</div><div style="font-weight: 600; font-size: 13px;">${cap.title}</div><div style="font-size: 11px; color: #8D99AE;">${cap.desc}</div>`;
+        card.onclick = () => {
+            if (cap.icon === "🔐") startPredictiveBackup();
+            else if (cap.icon === "🧹") executeWorkspaceAction('PURGE_NON_CRITICAL', { keepExtensions: ['.txt', '.md'], keepNames: ['netrunner-final'] });
+            else if (cap.icon === "📸") executeWorkspaceAction('SMART_ORGANIZE', {});
+            else if (cap.icon === "📂") appendSystemMessage("Arrastra una carpeta aqui o usa el boton 'Activar Nodo Local' para comenzar.");
+        };
+        card.onmouseenter = () => card.style.background = "rgba(0,242,254,0.15)";
+        card.onmouseleave = () => card.style.background = "rgba(0,242,254,0.08)";
+        grid.appendChild(card);
+    });
+    
+    container.appendChild(grid);
+    
+    appendSystemMessage("💡 Tambien puedes decirme algo como: 'organiza mis fotos' o 'haz un backup de seguridad'");
+}
+
+function detectUserNeedsHelp(text) {
+    const helpPatterns = [
+        /que\s+pued(es|ede)s\s+hacer/i,
+        /como\s+funciona/i,
+        /ayuda/i,
+        /no\s+se/i,
+        /help/i,
+        /que\s+haces/i,
+        /no\s+sé/i,
+        /no\s+entiendo/i,
+        /que\s+es\s+esto/i,
+        /^(hola|hi|hey)$/i
+    ];
+    return helpPatterns.some(pattern => pattern.test(text));
+}
+
+function showIntegritySummary(workspaceName, summary) {
+    const parts = [];
+    parts.push(`${summary.totalFiles} archivos`);
+    if (summary.photoFilesCount > 0) parts.push(`${summary.photoFilesCount} 📸`);
+    if (summary.videoFilesCount > 0) parts.push(`${summary.videoFilesCount} 🎬`);
+    if (summary.audioFilesCount > 0) parts.push(`${summary.audioFilesCount} 🎵`);
+    if (summary.criticalFiles > 0) parts.push(`${summary.criticalFiles} 🔐`);
+    
+    const msg = `📁 **${workspaceName}**: ${parts.join(' • ')}`;
+    appendSystemMessage(msg);
 }
 
 function showLoader() {
