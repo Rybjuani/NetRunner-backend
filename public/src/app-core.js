@@ -15,7 +15,10 @@ const CRITICAL_FILE_PATTERNS = {
         '.key', '.pem', '.crt', '.cert', '.p12', '.pfx', '.pkcs12',
         '.sh', '.bash', '.zsh', '.fish', '.ps1', '.bat', '.cmd',
         '.sql', '.db', '.sqlite', '.sqlite3',
-        '.gpg', '.aes', '.enc'
+        '.gpg', '.aes', '.enc',
+        '.jpg', '.jpeg', '.png', '.gif', '.webp', '.heic', '.raw', '.bmp', '.svg', '.ico', '.tiff',
+        '.mp4', '.mov', '.avi', '.mkv', '.webm', '.m4v', '.flv', '.wmv', '.mpeg', '.mpg',
+        '.mp3', '.wav', '.flac', '.aac', '.ogg', '.wma', '.m4a', '.opus'
     ],
     names: [
         'Dockerfile', 'docker-compose.yml', 'docker-compose.yaml',
@@ -36,15 +39,40 @@ const CRITICAL_FILE_PATTERNS = {
         'wp-config.php', '.env.local', '.env.production',
         'secrets.yaml', 'secrets.yml', 'credentials.json',
         'terraform.tfstate', '.terraform.tfstate',
-        'ansible.cfg', 'vault.yml'
+        'ansible.cfg', 'vault.yml',
+        'DCIM', 'Pictures', 'Photos', 'Imagenes', 'Fotos', 'Videos', 'Music'
     ],
     paths: [
         '.ssh', '.gnupg', '.passwords', '.secrets',
         'etc/ssh', 'etc/passwd', 'etc/shadow', 'etc/group',
         '.config', '.local/share', '.cache',
-        'Documents', 'Documentos', 'Desktop', 'Escritorio'
+        'Documents', 'Documentos', 'Desktop', 'Escritorio',
+        'Pictures', 'Photos', 'Imagenes', 'Fotos', 'Videos', 'Music',
+        'DCIM', 'Downloads', 'Descargas'
     ]
 };
+
+const MEDIA_EXTENSIONS = {
+    photos: ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.heic', '.raw', '.bmp', '.svg', '.ico', '.tiff'],
+    videos: ['.mp4', '.mov', '.avi', '.mkv', '.webm', '.m4v', '.flv', '.wmv', '.mpeg', '.mpg'],
+    audio: ['.mp3', '.wav', '.flac', '.aac', '.ogg', '.wma', '.m4a', '.opus']
+};
+
+function isMediaFile(filename) {
+    const lower = filename.toLowerCase();
+    for (const ext of [...MEDIA_EXTENSIONS.photos, ...MEDIA_EXTENSIONS.videos, ...MEDIA_EXTENSIONS.audio]) {
+        if (lower.endsWith(ext)) return true;
+    }
+    return false;
+}
+
+function getMediaType(filename) {
+    const lower = filename.toLowerCase();
+    if (MEDIA_EXTENSIONS.photos.some(ext => lower.endsWith(ext))) return 'photo';
+    if (MEDIA_EXTENSIONS.videos.some(ext => lower.endsWith(ext))) return 'video';
+    if (MEDIA_EXTENSIONS.audio.some(ext => lower.endsWith(ext))) return 'audio';
+    return null;
+}
 
 const DOM = {
     chat: document.getElementById("chat-messages"),
@@ -422,7 +450,15 @@ async function runRecursiveIntegrityValidation(options = {}) {
                 maxEntries: 0,
                 criticalFiles: 0,
                 criticalBytes: 0,
-                scanErrors: 0
+                scanErrors: 0,
+                mediaFilesCount: 0,
+                mediaBytes: 0,
+                photoFilesCount: 0,
+                photoBytes: 0,
+                videoFilesCount: 0,
+                videoBytes: 0,
+                audioFilesCount: 0,
+                audioBytes: 0
             },
             tree: null
         };
@@ -440,7 +476,15 @@ async function runRecursiveIntegrityValidation(options = {}) {
         entriesVisited: 0,
         maxEntries,
         truncated: false,
-        scanErrors: []
+        scanErrors: [],
+        mediaFilesCount: 0,
+        mediaBytes: 0,
+        photoFilesCount: 0,
+        photoBytes: 0,
+        videoFilesCount: 0,
+        videoBytes: 0,
+        audioFilesCount: 0,
+        audioBytes: 0
     };
 
     const tree = await scanDirectoryNode(state.workspaceHandle, state.workspaceHandle.name, "", 0, context);
@@ -462,7 +506,15 @@ async function runRecursiveIntegrityValidation(options = {}) {
             criticalBytes: context.criticalBytes,
             truncated: context.truncated,
             maxEntries: context.maxEntries,
-            scanErrors: scanErrorCount
+            scanErrors: scanErrorCount,
+            mediaFilesCount: context.mediaFilesCount || 0,
+            mediaBytes: context.mediaBytes || 0,
+            photoFilesCount: context.photoFilesCount || 0,
+            photoBytes: context.photoBytes || 0,
+            videoFilesCount: context.videoFilesCount || 0,
+            videoBytes: context.videoBytes || 0,
+            audioFilesCount: context.audioFilesCount || 0,
+            audioBytes: context.audioBytes || 0
         },
         scanErrors: context.scanErrors || [],
         tree
@@ -514,6 +566,20 @@ function getCriticalScore(filename, filePath) {
     if (lowerName.includes('secret') || lowerName.includes('password') || lowerName.includes('credential')) score += 40;
     if (lowerName === 'docker-compose.yml' || lowerName === 'dockerfile') score += 25;
     if (lowerName.endsWith('.env')) score += 35;
+    
+    if (isMediaFile(filename)) {
+        const mediaType = getMediaType(filename);
+        if (mediaType === 'video') score += 45;
+        else if (mediaType === 'photo') score += 35;
+        else if (mediaType === 'audio') score += 25;
+    }
+    
+    if (lowerPath.includes('pictures') || lowerPath.includes('photos') || 
+        lowerPath.includes('imagenes') || lowerPath.includes('fotos') ||
+        lowerPath.includes('videos') || lowerPath.includes('dcim') ||
+        lowerPath.includes('music') || lowerPath.includes('descargas')) {
+        score += 15;
+    }
     
     return score;
 }
@@ -574,10 +640,26 @@ async function scanDirectoryNode(dirHandle, name, relativePath, depth, context) 
 
             const criticalScore = getCriticalScore(entry.name, nextPath);
             const isCritical = criticalScore > 0;
+            const mediaType = getMediaType(entry.name);
 
             if (isCritical) {
                 context.criticalFiles = (context.criticalFiles || 0) + 1;
                 context.criticalBytes = (context.criticalBytes || 0) + file.size;
+            }
+
+            if (mediaType) {
+                context.mediaFilesCount = (context.mediaFilesCount || 0) + 1;
+                context.mediaBytes = (context.mediaBytes || 0) + file.size;
+                if (mediaType === 'photo') {
+                    context.photoFilesCount = (context.photoFilesCount || 0) + 1;
+                    context.photoBytes = (context.photoBytes || 0) + file.size;
+                } else if (mediaType === 'video') {
+                    context.videoFilesCount = (context.videoFilesCount || 0) + 1;
+                    context.videoBytes = (context.videoBytes || 0) + file.size;
+                } else if (mediaType === 'audio') {
+                    context.audioFilesCount = (context.audioFilesCount || 0) + 1;
+                    context.audioBytes = (context.audioBytes || 0) + file.size;
+                }
             }
 
             children.push({
@@ -589,7 +671,8 @@ async function scanDirectoryNode(dirHandle, name, relativePath, depth, context) 
                 hashMode: hashInfo.mode,
                 modifiedAt: new Date(file.lastModified).toISOString(),
                 isCritical,
-                criticalScore
+                criticalScore,
+                mediaType
             });
         } catch (entryError) {
             console.warn(`[Scan] Cannot access ${nextPath}: ${entryError.message}`);
@@ -1702,11 +1785,22 @@ async function openDirectory(rootHandle, segments) {
 }
 
 function appendAIReadySummary(integrity, references) {
-    const gb = (integrity.summary.documentsBytes / (1024 ** 3)).toFixed(2);
+    const docGb = (integrity.summary.documentsBytes / (1024 ** 3)).toFixed(2);
     const refs = references.length ? references.join(", ") : "sin rutas criticas detectadas";
+    
+    const photos = integrity.summary.photoFilesCount || 0;
+    const videos = integrity.summary.videoFilesCount || 0;
+    const audio = integrity.summary.audioFilesCount || 0;
+    const mediaGb = ((integrity.summary.mediaBytes || 0) / (1024 ** 3)).toFixed(2);
+    
+    let mediaInfo = "";
+    if (photos > 0 || videos > 0) {
+        mediaInfo = ` He detectado ${photos} fotos y ${videos} videos (${mediaGb} GB).`;
+    }
+    
     appendMessage(
         "assistant",
-        `He analizado tu estructura de archivos. Tienes ${gb} GB en Documentos y configuraciones criticas en rutas ocultas (${refs}). ¿Deseas iniciar el respaldo de seguridad?`
+        `He analizado tu estructura de archivos. Tienes ${docGb} GB en Documentos y configuraciones criticas en rutas ocultas (${refs}).${mediaInfo} ¿Deseas iniciar el respaldo de seguridad?`
     );
 }
 
