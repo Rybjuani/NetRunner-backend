@@ -23,7 +23,12 @@ const app = express();
 const httpServer = createServer(app);
 
 // --- Initialize Socket.io Server ---
-const io = new SocketIOServer(httpServer);
+const io = new SocketIOServer(httpServer, {
+    cors: {
+        origin: "*", // Allow all origins for testing with Wine/various clients
+        methods: ["GET", "POST"]
+    }
+});
 
 // --- Agent Socket Mapping ---
 const agentSocketMap = {}; // Stores agentId -> socket.id
@@ -146,6 +151,13 @@ app.use(express.static(path.join(__dirname, 'public')));
 // --- Routes ---
 app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+// Temporary test route for manually triggering open_workspace
+app.get('/api/test-open', (req, res) => {
+    console.log('[DEBUG] /api/test-open invoked. Emitting open_workspace to all connected sockets.');
+    io.emit('open_workspace', { message: 'Test open workspace' });
+    res.status(200).send('open_workspace event emitted to all connected sockets.');
 });
 
 app.get('/api/check-file', async (req, res) => {
@@ -333,6 +345,7 @@ io.on('connection', (socket) => {
     socket.on('register_agent', (data) => {
         if (data.agentId) {
             agentSocketMap[data.agentId] = socket.id;
+            console.log('[DEBUG] Agente registrado con ID: ' + data.agentId); // Debug log
             console.log(`Agent registered: ${data.agentId} with socket ID ${socket.id}`);
             // Inform the dashboard about the new agent connection
             io.emit('vincular_confirmado', { message: '¡Vínculo establecido con éxito! Ya veo tu Workspace.', agentId: data.agentId });
