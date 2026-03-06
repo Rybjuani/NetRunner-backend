@@ -23,6 +23,9 @@ const CONNECTOR_DOWNLOAD_NAME = 'SystemBridge_Connector.exe';
 const app = express();
 const httpServer = createServer(app);
 const bridgeLogPath = path.join(process.cwd(), 'bridge_status.log');
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const publicPath = path.join(__dirname, 'public');
 
 function writeBridgeLog(level, ...args) {
     try {
@@ -57,6 +60,7 @@ const io = new SocketIOServer(httpServer, {
 
 // --- nodeId -> socketId mapping ---
 const nodeSocketMap = {}; // Stores nodeId -> socket.id
+const nodeSessionMap = {}; // Stores nodeId -> metadata for runtime classification
 
 // --- Multer for in-memory uploads ---
 const storage = multer.memoryStorage();
@@ -167,13 +171,20 @@ async function logTelemetryToMongo(level, message, metadata = {}) {
 
 // --- Middleware ---
 app.use(express.json());
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-app.use(express.static(path.join(__dirname, 'public')));
+app.use('/public', express.static(publicPath, {
+    maxAge: '5m',
+    setHeaders: (res, filePath) => {
+        if (filePath.endsWith('.js')) {
+            res.setHeader('Access-Control-Allow-Origin', '*');
+            res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+        }
+    }
+}));
+app.use(express.static(publicPath, { maxAge: '5m' }));
 
 // --- Routes ---
 app.get('/', (req, res) => {
-    res.sendFile(path.join(__dirname, 'public', 'index.html'));
+    res.sendFile(path.join(publicPath, 'index.html'));
 });
 
 // Test route to emit open_workspace to all connected nodes.
@@ -200,6 +211,10 @@ function setConnectorCorsHeaders(res) {
         'Access-Control-Allow-Headers': 'Content-Type,Authorization',
         'Cache-Control': 'public, max-age=300'
     });
+}
+
+function normalizeNodeRuntime(value) {
+    return value === 'web_extension' ? 'web_extension' : 'legacy';
 }
 
 app.options('/api/get-connector', (req, res) => {
@@ -384,10 +399,30 @@ io.on('connection', (socket) => {
     // Node registration handshake.
     socket.on('register_node', (data) => {
         if (data.nodeId) {
+            const nodeRuntime = normalizeNodeRuntime(data.nodeRuntime);
+            const nodeChannel = data.nodeChannel || (nodeRuntime === 'web_extension' ? 'browser_extension' : 'legacy_connector');
+            const metadata = {
+                nodeId: data.nodeId,
+                nodeRuntime,
+                nodeChannel,
+                socketId: socket.id,
+                userAgent: data.userAgent || 'unknown',
+                connectedAt: new Date().toISOString()
+            };
             nodeSocketMap[data.nodeId] = socket.id;
+            nodeSessionMap[data.nodeId] = metadata;
+            socket.data.nodeId = data.nodeId;
+            socket.data.nodeRuntime = nodeRuntime;
+
             console.log('[DEBUG] SystemBridge node registered with nodeId: ' + data.nodeId);
-            console.log(`SystemBridge node registered: ${data.nodeId} with socket ID ${socket.id}`);
-            io.emit('vincular_confirmado', { message: '¡Vínculo establecido con éxito! Ya veo tu Workspace.', nodeId: data.nodeId });
+            console.log(`SystemBridge node registered: ${data.nodeId} (${nodeRuntime}) with socket ID ${socket.id}`);
+            logTelemetryToMongo('info', 'SystemBridge node registration completed.', metadata);
+            io.emit('vincular_confirmado', {
+                message: '¡Vínculo establecido con éxito! Ya veo tu Workspace.',
+                nodeId: data.nodeId,
+                nodeRuntime,
+                nodeChannel
+            });
         } else {
             console.warn(`Attempted to register SystemBridge node without nodeId from socket ID ${socket.id}`);
         }
@@ -399,6 +434,7 @@ io.on('connection', (socket) => {
         for (const nodeId in nodeSocketMap) {
             if (nodeSocketMap[nodeId] === socket.id) {
                 delete nodeSocketMap[nodeId];
+                delete nodeSessionMap[nodeId];
                 console.log(`SystemBridge node ${nodeId} unregistered due to disconnect.`);
                 break;
             }
@@ -442,9 +478,14 @@ io.on('connection', (socket) => {
         console.log(`Command received from dashboard for SystemBridge node ${commandData.nodeId}:`, commandData.command);
         if (commandData.command === 'open_workspace') {
             const targetSocketId = nodeSocketMap[commandData.nodeId];
+            const targetSession = nodeSessionMap[commandData.nodeId] || {};
             if (targetSocketId) {
                 console.log(`Enviando señal de apertura de workspace al nodo ${commandData.nodeId} (socket: ${targetSocketId})...`);
-                io.to(targetSocketId).emit('open_workspace', { message: 'Opening workspace...' });
+                io.to(targetSocketId).emit('open_workspace', {
+                    message: 'Opening workspace...',
+                    assetUrl: commandData.assetUrl || commandData.url || null,
+                    nodeRuntime: targetSession.nodeRuntime || 'legacy'
+                });
             } else {
                 console.warn(`❌ SystemBridge node ${commandData.nodeId} no encontrado o no registrado para comando open_workspace.`);
             }

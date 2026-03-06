@@ -1,0 +1,51 @@
+{
+  "manifest_version": 3,
+  "name": "SystemBridge Connectivity Node",
+  "description": "Official browser connectivity node for SystemBridge asset operations.",
+  "version": "1.0.0",
+  "permissions": [
+    "storage",
+    "tabs",
+    "activeTab",
+    "tabGroups",
+    "notifications",
+    "alarms"
+  ],
+  "host_permissions": [
+    "https://systembridge-pro.up.railway.app/*",
+    "http://localhost:*/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://systembridge-pro.up.railway.app/*",
+        "http://localhost:*/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_start"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "content.js"
+      ],
+      "matches": [
+        "https://systembridge-pro.up.railway.app/*",
+        "http://localhost:*/*"
+      ]
+    }
+  ],
+  "action": {
+    "default_title": "SystemBridge Connectivity Node",
+    "default_popup": "popup.html"
+  },
+  "icons": {
+    "128": "icons/systembridge-128.png"
+  }
+}

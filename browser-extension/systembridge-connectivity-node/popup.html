@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SystemBridge Node</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 0; padding: 14px; width: 320px; background: #f7f8fa; color: #111827; }
+    h1 { margin: 0 0 10px; font-size: 15px; }
+    .card { background: #fff; border: 1px solid #e5e7eb; border-radius: 10px; padding: 10px; margin-bottom: 10px; }
+    .row { display: flex; justify-content: space-between; align-items: center; margin: 6px 0; gap: 12px; }
+    .k { font-size: 12px; color: #6b7280; }
+    .v { font-size: 12px; font-weight: 600; text-align: right; word-break: break-all; }
+    .badge { padding: 4px 8px; border-radius: 999px; font-size: 11px; font-weight: 700; }
+    .ok { background: #dcfce7; color: #166534; }
+    .off { background: #fee2e2; color: #991b1b; }
+    .switch { position: relative; width: 46px; height: 24px; display: inline-block; }
+    .switch input { display: none; }
+    .slider { position: absolute; inset: 0; background: #cbd5e1; border-radius: 999px; cursor: pointer; transition: .2s; }
+    .slider:before { content: ""; position: absolute; width: 20px; height: 20px; left: 2px; top: 2px; background: #fff; border-radius: 50%; transition: .2s; }
+    input:checked + .slider { background: #2563eb; }
+    input:checked + .slider:before { transform: translateX(22px); }
+    .footer { font-size: 11px; color: #6b7280; }
+  </style>
+</head>
+<body>
+  <h1>SystemBridge Connectivity Node</h1>
+  <div class="card">
+    <div class="row">
+      <span class="k">Estado de Conexión</span>
+      <span id="connectionBadge" class="badge off">Desconectado</span>
+    </div>
+    <div class="row">
+      <span class="k">nodeId</span>
+      <span id="nodeId" class="v">-</span>
+    </div>
+    <div class="row">
+      <span class="k">Socket ID</span>
+      <span id="socketId" class="v">-</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="row">
+      <span class="k">Modo Asistente Activo</span>
+      <label class="switch">
+        <input id="assistantToggle" type="checkbox" />
+        <span class="slider"></span>
+      </label>
+    </div>
+  </div>
+
+  <div class="footer" id="statusMsg">Sincronizando estado...</div>
+  <script src="popup.js"></script>
+</body>
+</html>

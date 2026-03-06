@@ -16,13 +16,15 @@ const state = {
     dirHandle: null,
     isProcessing: false,
     currentModel: CONFIG.DEFAULT_MODEL,
-    socket: io() // Initialize Socket.io client
+    socket: io(), // Initialize Socket.io client
+    hasConnectivityNode: null
 };
 
 window.addEventListener('DOMContentLoaded', () => {
     populateModels();
     appendSystemMessage("Protocolo SystemBridge activo. ¿Qué deseas ejecutar?");
     setupEvents();
+    setupConnectivityNodeStatusListener();
 
     // Listener for agent connection confirmation
     state.socket.on('vincular_confirmado', (payload) => {
@@ -31,6 +33,23 @@ window.addEventListener('DOMContentLoaded', () => {
         console.log("Received vinculacion_confirmada:", payload);
     });
 });
+
+function setupConnectivityNodeStatusListener() {
+    window.addEventListener('systembridge-node-status', (event) => {
+        const installed = Boolean(event.detail?.installed);
+        if (state.hasConnectivityNode === installed) return;
+        state.hasConnectivityNode = installed;
+
+        if (!installed) {
+            appendSystemMessage(
+                'Nodo de Conectividad no detectado. Para habilitar acciones locales seguras, activa "SystemBridge Connectivity Node" desde tu navegador.'
+            );
+            return;
+        }
+
+        appendSystemMessage('SystemBridge Connectivity Node detectado y listo para conexión.');
+    });
+}
 
 function populateModels() {
     if (!DOM.modelSelect) return;
