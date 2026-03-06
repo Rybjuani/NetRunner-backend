@@ -3,45 +3,68 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>SystemBridge Pro</title>
+    <title>SystemBridge | Asistente IA de Productividad</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     <link rel="stylesheet" href="src/styles.css">
 </head>
 <body>
-    <div class="mesh-gradient"></div>
-    <div class="noise-overlay"></div>
+    <div class="bg-grid"></div>
+    <div class="bg-glow"></div>
 
     <div class="app-shell">
-        <header class="main-header">
+        <header class="main-header glass-panel">
             <div class="brand">
-                <i class="fa-solid fa-bolt-lightning logo-icon"></i>
-                <span class="logo-text">NETRUNNER</span>
+                <i class="fa-solid fa-shield-halved logo-icon"></i>
+                <div>
+                    <h1 class="logo-text">SystemBridge</h1>
+                    <p class="logo-sub">Asistente IA de Productividad de Elite</p>
+                </div>
             </div>
             <div class="model-picker">
                 <select id="model-select"></select>
             </div>
         </header>
 
-        <main id="chat-messages" class="chat-viewport">
-            <!-- El chat comienza aquí directamente -->
-        </main>
+        <aside id="node-status-card" class="node-status-card glass-panel disconnected" aria-live="polite">
+            <div class="node-status-head">
+                <span id="node-status-dot" class="status-dot"></span>
+                <div>
+                    <p class="status-label">Anillo de Estado</p>
+                    <p id="node-status-text" class="status-value">Nodo de Conectividad Desactivado</p>
+                </div>
+            </div>
+            <button id="sync-workspace-btn" class="sync-btn" disabled>
+                <i class="fa-solid fa-wand-magic-sparkles"></i>
+                <span>Sincronizar Workspace Local</span>
+            </button>
+        </aside>
 
-        <footer class="composer">
-            <div class="composer-container">
-                <form id="chat-form">
-                    <textarea 
-                        id="user-input" 
-                        placeholder="Escribe una orden..." 
-                        rows="1"
-                        spellcheck="false"
-                    ></textarea>
-                    <button type="submit" id="send-btn">
-                        <i class="fa-solid fa-arrow-up"></i>
-                    </button>
-                </form>
+        <main id="chat-messages" class="chat-viewport glass-panel"></main>
+
+        <footer class="composer glass-panel">
+            <form id="chat-form" class="prompt-box">
+                <textarea
+                    id="user-input"
+                    placeholder="Describe la tarea que quieres resolver..."
+                    rows="1"
+                    spellcheck="false"
+                ></textarea>
+                <button type="submit" id="send-btn" aria-label="Enviar instruccion">
+                    <i class="fa-solid fa-arrow-up"></i>
+                </button>
+            </form>
+            <div class="quick-actions">
+                <button id="quick-summarize" class="quick-btn" type="button">
+                    <i class="fa-regular fa-file-lines"></i>
+                    <span>Resumir Pagina</span>
+                </button>
+                <button id="quick-clean-tabs" class="quick-btn" type="button">
+                    <i class="fa-solid fa-broom"></i>
+                    <span>Limpiar Pestanas</span>
+                </button>
             </div>
         </footer>
     </div>
