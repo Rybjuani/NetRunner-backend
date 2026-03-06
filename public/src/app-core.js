@@ -1010,44 +1010,107 @@ async function checkAndRequestWritePermission() {
 
 async function executeWorkspaceAction(actionType, params = {}) {
     if (!state.workspaceHandle) {
+        notifyActionError("workspace_not_authorized", "No hay workspace autorizado");
         return { ok: false, error: "workspace_not_authorized" };
     }
 
-    const permission = await checkAndRequestWritePermission();
-    if (!permission.granted) {
-        appendSystemMessage(`⚠️ Se requiere permiso de escritura: ${permission.error}`);
-        return { ok: false, error: permission.error };
-    }
-
     let result;
+    let needsWritePermission = !['READ_FILE_CONTENT', 'GET_FILE_INFO'].includes(actionType);
     
-    switch (actionType) {
-        case 'PURGE_NON_CRITICAL':
-            result = await purgeNonCritical(params);
-            break;
-        case 'CLEAN_WORKSPACE':
-            result = await cleanWorkspace(params);
-            break;
-        case 'CREATE_FILE':
-            await createFileInWorkspace(params.path, params.content || "");
-            appendSystemMessage(`Archivo creado: ${params.path}`);
-            result = { ok: true, filesCreated: 1 };
-            break;
-        case 'REMOVE_FILE':
-            await removeFileInWorkspace(params.path);
-            appendSystemMessage(`Archivo eliminado: ${params.path}`);
-            result = { ok: true, filesDeleted: 1 };
-            break;
-        case 'MOVE_FILE':
-            await moveFileInWorkspace(params.from, params.to);
-            appendSystemMessage(`Archivo movido: ${params.from} -> ${params.to}`);
-            result = { ok: true };
-            break;
-        default:
-            return { ok: false, error: `unknown_action:${actionType}` };
+    if (needsWritePermission) {
+        const permission = await checkAndRequestWritePermission();
+        if (!permission.granted) {
+            appendSystemMessage(`⚠️ Se requiere permiso de escritura: ${permission.error}`);
+            return { ok: false, error: permission.error };
+        }
+    }
+    
+    try {
+        switch (actionType) {
+            case 'PURGE_NON_CRITICAL':
+                result = await purgeNonCritical(params);
+                notifyActionSuccess('PURGE_NON_CRITICAL', `Eliminado(s) ${result.deleted} archivo(s), ${formatBytes(result.bytesFreed)} liberados`);
+                break;
+                
+            case 'CLEAN_WORKSPACE':
+                result = await cleanWorkspace(params);
+                notifyActionSuccess('CLEAN_WORKSPACE', `Eliminado(s) ${result.deleted} archivo(s)`);
+                break;
+                
+            case 'CREATE_FILE':
+                await createFileInWorkspace(params.path, params.content || "");
+                notifyActionSuccess('CREATE_FILE', `Archivo '${params.path}' creado`);
+                result = { ok: true, filesCreated: 1, path: params.path };
+                break;
+                
+            case 'CREATE_FOLDER':
+                await createFolderInWorkspace(params.path);
+                notifyActionSuccess('CREATE_FOLDER', `Carpeta '${params.path}' creada`);
+                result = { ok: true, foldersCreated: 1, path: params.path };
+                break;
+                
+            case 'REMOVE_FILE':
+                await removeFileInWorkspace(params.path);
+                notifyActionSuccess('REMOVE_FILE', `Archivo '${params.path}' eliminado`);
+                result = { ok: true, filesDeleted: 1, path: params.path };
+                break;
+                
+            case 'MOVE_FILE':
+                await moveFileInWorkspace(params.from, params.to);
+                notifyActionSuccess('MOVE_FILE', `Movido: ${params.from} → ${params.to}`);
+                result = { ok: true, from: params.from, to: params.to };
+                break;
+                
+            case 'RENAME_ENTRY':
+                result = await renameEntry(params.path, params.newName);
+                notifyActionSuccess('RENAME_ENTRY', `Renombrado: '${params.path}' → '${params.newName}'`);
+                break;
+                
+            case 'READ_FILE_CONTENT':
+                result = await readFileContent(params.path);
+                notifyActionSuccess('READ_FILE_CONTENT', `Leído: '${params.path}' (${result.size} bytes)`);
+                if (state.socket && state.socketConnected) {
+                    state.socket.emit("file_content_result", {
+                        nodeId: state.nodeId,
+                        path: params.path,
+                        content: result.content,
+                        size: result.size,
+                        timestamp: new Date().toISOString()
+                    });
+                }
+                break;
+                
+            case 'SMART_ORGANIZE':
+                result = await smartOrganize(params);
+                notifyActionSuccess('SMART_ORGANIZE', `Organizados ${result.moved} archivos en carpetas`);
+                break;
+                
+            case 'GET_FILE_INFO':
+                result = await getFileInfo(params.path);
+                notifyActionSuccess('GET_FILE_INFO', `Info de '${params.path}': ${result.size} bytes`);
+                break;
+                
+            default:
+                return { ok: false, error: `unknown_action:${actionType}` };
+        }
+    } catch (error) {
+        console.error(`[Action Dispatcher] Error in ${actionType}:`, error);
+        notifyActionError(actionType, error.message);
+        
+        if (state.socket && state.socketConnected) {
+            state.socket.emit("file_action_error", {
+                nodeId: state.nodeId,
+                action: actionType,
+                error: error.message,
+                params: params,
+                timestamp: new Date().toISOString()
+            });
+        }
+        
+        return { ok: false, action: actionType, error: error.message };
     }
 
-    if (result?.ok) {
+    if (result?.ok && needsWritePermission) {
         appendSystemMessage("🔄 Actualizando árbol de archivos...");
         const newReport = await runRecursiveIntegrityValidation();
         
@@ -1055,10 +1118,18 @@ async function executeWorkspaceAction(actionType, params = {}) {
             state.socket.emit("system_integrity_report", newReport);
         }
         
-        appendSystemMessage(`✅ Acción completada. Nuevo inventario: ${newReport.summary.totalFiles} archivos, ${newReport.summary.totalBytes} bytes.`);
+        appendSystemMessage(`✅ Inventario actualizado: ${newReport.summary.totalFiles} archivos, ${formatBytes(newReport.summary.totalBytes)}`);
     }
 
     return result;
+}
+
+function notifyActionSuccess(action, message) {
+    appendSystemMessage(`✅ [${action}] ${message}`);
+}
+
+function notifyActionError(action, error) {
+    appendSystemMessage(`❌ [${action}] Error: ${error}`);
 }
 
 async function cleanWorkspace(params = {}) {
@@ -1234,6 +1305,11 @@ async function handleWorkspaceInstruction(instruction) {
             return result;
         }
 
+        if (command === "createFolder" || command === "CREATE_FOLDER") {
+            const result = await executeWorkspaceAction('CREATE_FOLDER', { path: args.path });
+            return result;
+        }
+
         if (command === "removeFile" || command === "REMOVE_FILE") {
             const result = await executeWorkspaceAction('REMOVE_FILE', { path: args.path });
             return result;
@@ -1241,6 +1317,29 @@ async function handleWorkspaceInstruction(instruction) {
 
         if (command === "moveFile" || command === "MOVE_FILE") {
             const result = await executeWorkspaceAction('MOVE_FILE', { from: args.from, to: args.to });
+            return result;
+        }
+
+        if (command === "renameFile" || command === "RENAME_ENTRY" || command === "rename") {
+            const result = await executeWorkspaceAction('RENAME_ENTRY', { path: args.path, newName: args.newName });
+            return result;
+        }
+
+        if (command === "readFile" || command === "READ_FILE_CONTENT") {
+            const result = await executeWorkspaceAction('READ_FILE_CONTENT', { path: args.path });
+            return result;
+        }
+
+        if (command === "getFileInfo" || command === "GET_FILE_INFO") {
+            const result = await executeWorkspaceAction('GET_FILE_INFO', { path: args.path });
+            return result;
+        }
+
+        if (command === "smartOrganize" || command === "SMART_ORGANIZE") {
+            const result = await executeWorkspaceAction('SMART_ORGANIZE', {
+                categories: args.categories,
+                targetDir: args.targetDir
+            });
             return result;
         }
 
@@ -1314,6 +1413,203 @@ async function moveFileInWorkspace(fromPath, toPath) {
     await writable.close();
 
     await sourceParent.removeEntry(sourceName);
+}
+
+async function createFolderInWorkspace(relativePath) {
+    if (!relativePath) throw new Error("Path de carpeta requerido.");
+    const parts = normalizePath(relativePath);
+    await ensureDirectory(state.workspaceHandle, parts);
+}
+
+async function renameEntry(oldPath, newName) {
+    if (!oldPath || !newName) throw new Error("Path original y nuevo nombre requeridos.");
+    
+    const oldParts = normalizePath(oldPath);
+    const entryName = oldParts.pop();
+    const parentDir = await openDirectory(state.workspaceHandle, oldParts);
+    
+    let entryHandle;
+    let isDirectory = false;
+    
+    try {
+        entryHandle = await parentDir.getFileHandle(entryName);
+    } catch {
+        try {
+            entryHandle = await parentDir.getDirectoryHandle(entryName);
+            isDirectory = true;
+        } catch {
+            throw new Error(`No se encontró '${entryName}' en la ruta especificada`);
+        }
+    }
+    
+    if (isDirectory) {
+        await parentDir.getDirectoryHandle(newName, { create: true });
+    } else {
+        await parentDir.getFileHandle(newName, { create: true });
+    }
+    
+    await parentDir.removeEntry(entryName);
+    
+    return {
+        ok: true,
+        action: 'RENAME_ENTRY',
+        oldPath,
+        newPath: oldParts.length > 0 ? `${oldParts.join('/')}/${newName}` : newName
+    };
+}
+
+async function readFileContent(relativePath) {
+    if (!relativePath) throw new Error("Path de archivo requerido.");
+    
+    const parts = normalizePath(relativePath);
+    const fileName = parts.pop();
+    const parentDir = await openDirectory(state.workspaceHandle, parts);
+    
+    let fileHandle;
+    try {
+        fileHandle = await parentDir.getFileHandle(fileName);
+    } catch {
+        throw new Error(`No se encontró el archivo '${fileName}'`);
+    }
+    
+    const file = await fileHandle.getFile();
+    const content = await file.text();
+    
+    return {
+        ok: true,
+        action: 'READ_FILE_CONTENT',
+        path: relativePath,
+        content,
+        size: file.size,
+        lastModified: new Date(file.lastModified).toISOString()
+    };
+}
+
+async function getFileInfo(relativePath) {
+    if (!relativePath) throw new Error("Path de archivo requerido.");
+    
+    const parts = normalizePath(relativePath);
+    const entryName = parts.pop();
+    const parentDir = await openDirectory(state.workspaceHandle, parts);
+    
+    let entryHandle;
+    let isDirectory = false;
+    
+    try {
+        entryHandle = await parentDir.getFileHandle(entryName);
+    } catch {
+        try {
+            entryHandle = await parentDir.getDirectoryHandle(entryName);
+            isDirectory = true;
+        } catch {
+            throw new Error(`No se encontró '${entryName}'`);
+        }
+    }
+    
+    if (isDirectory) {
+        return {
+            ok: true,
+            path: relativePath,
+            isDirectory: true,
+            name: entryName
+        };
+    }
+    
+    const file = await entryHandle.getFile();
+    return {
+        ok: true,
+        path: relativePath,
+        isDirectory: false,
+        name: entryName,
+        size: file.size,
+        lastModified: new Date(file.lastModified).toISOString()
+    };
+}
+
+const SMART_ORGANIZE_CATEGORIES = {
+    'Imágenes': ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.svg', '.ico', '.tiff', '.raw', '.heic'],
+    'Documentos': ['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.odt', '.ods', '.odp', '.txt', '.rtf', '.md'],
+    'Videos': ['.mp4', '.avi', '.mkv', '.mov', '.wmv', '.flv', '.webm', '.m4v', '.mpeg', '.mpg'],
+    'Audio': ['.mp3', '.wav', '.flac', '.aac', '.ogg', '.wma', '.m4a', '.opus'],
+    'Archivos': ['.zip', '.rar', '.7z', '.tar', '.gz', '.bz2', '.xz'],
+    'Código': ['.js', '.ts', '.py', '.java', '.c', '.cpp', '.h', '.cs', '.go', '.rs', '.rb', '.php', '.html', '.css', '.json', '.xml', '.yaml', '.yml']
+};
+
+async function smartOrganize(params = {}) {
+    const categories = params.categories || SMART_ORGANIZE_CATEGORIES;
+    const targetDir = params.targetDir || '';
+    
+    const moved = [];
+    const skipped = [];
+    
+    async function walkAndOrganize(dirHandle, currentPath) {
+        for await (const entry of dirHandle.values()) {
+            const pathValue = currentPath ? `${currentPath}/${entry.name}` : entry.name;
+            
+            if (entry.kind === "directory") {
+                const isTargetFolder = Object.keys(categories).some(cat => 
+                    entry.name.toLowerCase() === cat.toLowerCase()
+                );
+                if (!isTargetFolder) {
+                    await walkAndOrganize(entry, pathValue);
+                }
+                continue;
+            }
+            
+            const fileNameLower = entry.name.toLowerCase();
+            const extMatch = fileNameLower.match(/\.([^.]+)$/);
+            const extension = extMatch ? `.${extMatch[1]}` : '';
+            
+            let targetFolder = null;
+            
+            for (const [folderName, extensions] of Object.entries(categories)) {
+                if (extensions.includes(extension)) {
+                    targetFolder = folderName;
+                    break;
+                }
+            }
+            
+            if (!targetFolder) {
+                skipped.push(pathValue + ' [SIN_CATEGORÍA]');
+                continue;
+            }
+            
+            const destFolderPath = targetDir ? `${targetDir}/${targetFolder}` : targetFolder;
+            
+            try {
+                const sourceParts = normalizePath(pathValue);
+                const sourceName = sourceParts.pop();
+                const sourceParent = await openDirectory(state.workspaceHandle, sourceParts);
+                const sourceFile = await sourceParent.getFileHandle(sourceName);
+                const sourceBlob = await sourceFile.getFile();
+                
+                const destParent = await ensureDirectory(state.workspaceHandle, normalizePath(destFolderPath));
+                const destFile = await destParent.getFileHandle(sourceName, { create: true });
+                
+                const writable = await destFile.createWritable();
+                await writable.write(await sourceBlob.arrayBuffer());
+                await writable.close();
+                
+                await sourceParent.removeEntry(sourceName);
+                
+                moved.push({ from: pathValue, to: `${destFolderPath}/${sourceName}` });
+            } catch (e) {
+                console.error(`Error organizing ${pathValue}:`, e);
+                skipped.push(pathValue + ` (error: ${e.message})`);
+            }
+        }
+    }
+    
+    await walkAndOrganize(state.workspaceHandle, "");
+    
+    return {
+        ok: true,
+        action: 'SMART_ORGANIZE',
+        moved: moved.length,
+        skipped: skipped.length,
+        movedFiles: moved,
+        skippedFiles: skipped
+    };
 }
 
 function normalizePath(value) {

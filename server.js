@@ -265,12 +265,34 @@ app.post('/api/chat', async (req, res) => {
                 'Content-Type': 'application/json',
                 'Authorization': `Bearer ${selectedApiKey}`
             },
-            body: JSON.stringify({
+                body: JSON.stringify({
                 model: selectedModelName, // Use the determined model name
                 messages: [
                     {
                         role: 'system',
-                        content: 'Eres un Operador de Infraestructura SystemBridge. Tu tono debe ser tecnico, claro y servicial.\n\nCuando el usuario solicite conectar o sincronizar su workspace local, responde exactamente: "Iniciando tunel de sincronizacion seguro a traves del Nodo Local de SystemBridge...".\n\nDespues de esa respuesta, asume que el canal nativo de ejecucion para acciones locales es el Native Workspace Bridge y usa `[SYNC_WORKSPACE]` para iniciar la sincronizacion.\n\nNo ofrezcas ni escribas comandos de sistema en el chat (por ejemplo mkdir, echo, rm, mv, bash o PowerShell). En su lugar responde: "Sincronizando cambios en el workspace local..." y deriva la ejecucion al nodo local de forma silenciosa.\n\nSi recibes contexto de Seguridad Proactiva con resumen de integridad, puedes proponer Recuperacion de Desastres con esta formulacion: "He analizado tu estructura de archivos. ¿Deseas iniciar el respaldo de seguridad?".\n\nNo menciones flujos anteriores.'
+                        content: `Eres un Operador de Infraestructura SystemBridge. Tu tono debe ser tecnico, claro y servicial.
+
+Cuando el usuario solicite conectar o sincronizar su workspace local, responde exactamente: "Iniciando tunel de sincronizacion seguro a traves del Nodo Local de SystemBridge...".
+
+Tienes "manos" para ejecutar acciones en el filesystem del usuario. Cuando pida acciones como:
+- "renombra ese archivo" -> emite comando RENAME_ENTRY con {path, newName}
+- "crea una carpeta" -> emite CREATE_FOLDER con {path}
+- "lee ese archivo" -> emite READ_FILE_CONTENT con {path}
+- "organiza mis archivos" -> emite SMART_ORGANIZE
+- "elimina eso" -> emite REMOVE_FILE con {path}
+- "mueve el archivo" -> emite MOVE_FILE con {from, to}
+
+Cuando necesites actuar sobre archivos, NO describas comandos. Responde confirmando la accion y el sistema ejecutara automaticamente el comando.
+
+Despues de esa respuesta, asume que el canal nativo de ejecucion para acciones locales es el Native Workspace Bridge y usa [SYNC_WORKSPACE] para iniciar la sincronizacion.
+
+No ofrezcas ni escribas comandos de sistema en el chat (por ejemplo mkdir, echo, rm, mv, bash o PowerShell). En su lugar responde: "Sincronizando cambios en el workspace local..." y deriva la ejecucion al nodo local de forma silenciosa.
+
+Si recibes contexto de Seguridad Proactiva con resumen de integridad, puedes proponer Recuperacion de Desastres con esta formulacion: "He analizado tu estructura de archivos. ¿Deseas iniciar el respaldo de seguridad?".
+
+Cuando leas archivos, resume su contenido y pregunta si necesita hacer algo con la informacion.
+
+No menciones flujos anteriores.`
                     },
                     ...messages
                 ],
@@ -669,6 +691,53 @@ io.on('connection', (socket) => {
             summary: report.summary || {},
             workspaceName: report.workspaceName || 'unknown_workspace',
             timestamp: report.scannedAt || new Date().toISOString()
+        });
+    });
+
+    socket.on('file_content_result', (data) => {
+        if (!data?.nodeId) {
+            console.warn('file_content_result ignored: missing nodeId');
+            return;
+        }
+
+        console.log(`[File Content] ${data.path} read by node ${data.nodeId} (${data.size} bytes)`);
+        
+        logTelemetryToMongo('info', 'File content read', {
+            nodeId: data.nodeId,
+            path: data.path,
+            size: data.size
+        });
+
+        io.emit('dashboard_update', {
+            type: 'file_content_result',
+            nodeId: data.nodeId,
+            path: data.path,
+            size: data.size,
+            timestamp: data.timestamp
+        });
+    });
+
+    socket.on('file_action_error', (data) => {
+        if (!data?.nodeId) {
+            console.warn('file_action_error ignored: missing nodeId');
+            return;
+        }
+
+        console.error(`[File Action Error] ${data.action} failed: ${data.error}`);
+        
+        logTelemetryToMongo('error', `File action failed: ${data.action}`, {
+            nodeId: data.nodeId,
+            action: data.action,
+            error: data.error,
+            params: data.params
+        });
+
+        io.emit('dashboard_update', {
+            type: 'file_action_error',
+            nodeId: data.nodeId,
+            action: data.action,
+            error: data.error,
+            timestamp: data.timestamp
         });
     });
 });
