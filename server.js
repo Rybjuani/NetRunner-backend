@@ -145,51 +145,70 @@ app.get('/api/check-file', async (req, res) => {
 });
 
 app.post('/api/chat', async (req, res) => {
-    const { messages, model } = req.body;
-    let apiKey, apiUrl;
+    const { messages, model } = req.body; // 'model' from frontend determines preferred model
 
-    // Determine which AI model to use
-    if (model.includes('opencodezen')) {
-        apiKey = process.env.OPENCODE_ZEN_API_KEY;
-        apiUrl = 'https://api.opencodezen.com/v1/chat/completions'; // Placeholder for OpenCodeZen API
-    } else if (model.includes('groq')) {
-        apiKey = process.env.GROQ_API_KEY;
-        apiUrl = 'https://api.groq.com/openai/v1/chat/completions'; // Placeholder for Groq API
-    } else {
-        return res.status(400).json({ error: 'Unsupported AI model' });
+    let selectedApiKey, selectedApiUrl, selectedModelName;
+
+    // --- Prioritize Groq API ---
+    if (process.env.GROQ_API_KEY) {
+        selectedApiKey = process.env.GROQ_API_KEY;
+        selectedApiUrl = 'https://api.groq.com/openai/v1/chat/completions';
+        // Allow frontend to specify model, else default to mixtral
+        if (model === 'llama3-8b-8192' || model === 'mixtral-8x7b-32768') {
+            selectedModelName = model;
+        } else {
+            selectedModelName = 'mixtral-8x7b-32768'; // Default Groq model
+        }
+        console.log(`Using Groq API with model: ${selectedModelName}`);
+    } 
+    // --- Fallback to OpenCodeZen API ---
+    else if (process.env.OPENCODE_ZEN_API_KEY) {
+        selectedApiKey = process.env.OPENCODE_ZEN_API_KEY;
+        selectedApiUrl = 'https://api.opencodezen.com/v1/chat/completions';
+        selectedModelName = model; // Use model as provided by frontend or its default
+        console.log(`Using OpenCodeZen API with model: ${selectedModelName}`);
+    } 
+    // --- No AI API configured ---
+    else {
+        console.error('Neither GROQ_API_KEY nor OPENCODE_ZEN_API_KEY is configured.');
+        return res.status(500).json({ error: 'No AI API key configured on the server.' });
     }
 
-    if (!apiKey) {
-        return res.status(500).json({ error: `API key for ${model} not configured.` });
+    if (!selectedApiKey) { // Should not happen with the logic above, but good for safety
+        return res.status(500).json({ error: 'AI API key not configured.' });
     }
 
     try {
         const fetch = (await import('node-fetch')).default; // Dynamically import node-fetch
-        const aiResponse = await fetch(apiUrl, {
+        const aiResponse = await fetch(selectedApiUrl, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                'Authorization': `Bearer ${apiKey}`
+                'Authorization': `Bearer ${selectedApiKey}`
             },
             body: JSON.stringify({
-                model: model,
+                model: selectedModelName, // Use the determined model name
                 messages: messages,
-                temperature: 0.7 // Example parameter
+                temperature: 0.7 // Example parameter, can be made configurable
             })
         });
 
         const aiData = await aiResponse.json();
 
         if (!aiResponse.ok) {
-            console.error(`AI API error (${model}):`, aiData);
-            return res.status(aiResponse.status).json({ error: aiData.error?.message || 'Error from AI API' });
+            // Log the full error response from the external API for diagnosis
+            console.error(`External AI API error (${selectedModelName}):`, aiResponse.status, aiData);
+            return res.status(aiResponse.status).json({ 
+                error: aiData.error?.message || `Error from external AI API (${selectedModelName})`,
+                details: aiData // Include full details for debugging
+            });
         }
 
         res.json({ text: aiData.choices[0]?.message?.content || '' });
 
     } catch (error) {
         console.error('Error proxying AI request:', error);
-        res.status(500).json({ error: 'Failed to communicate with AI API' });
+        res.status(500).json({ error: `Failed to communicate with AI API: ${error.message}` });
     }
 });
 
