@@ -1,6 +1,6 @@
 {
   "name": "netrunner-backend",
-  "version": "4.0.0",
+  "version": "5.5.0",
   "description": "NetRunner Pro - Asistente IA con ejecución de código y sistema de archivos",
   "type": "module",
   "main": "server.js",
