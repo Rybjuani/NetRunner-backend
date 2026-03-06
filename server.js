@@ -25,6 +25,9 @@ const httpServer = createServer(app);
 // --- Initialize Socket.io Server ---
 const io = new SocketIOServer(httpServer);
 
+// --- Agent Socket Mapping ---
+const agentSocketMap = {}; // Stores agentId -> socket.id
+
 // --- Initialize Multer (memory storage for direct B2 upload) ---
 const storage = multer.memoryStorage();
 const upload = multer({ storage: storage });
@@ -326,9 +329,29 @@ io.on('connection', (socket) => {
     console.log('⚡ New client connected:', socket.id);
     logToMongo('info', 'Socket.io client connected', { socketId: socket.id });
 
+    // Handle agent registration
+    socket.on('register_agent', (data) => {
+        if (data.agentId) {
+            agentSocketMap[data.agentId] = socket.id;
+            console.log(`Agent registered: ${data.agentId} with socket ID ${socket.id}`);
+            // Inform the dashboard about the new agent connection
+            io.emit('vincular_confirmado', { message: '¡Vínculo establecido con éxito! Ya veo tu Workspace.', agentId: data.agentId });
+        } else {
+            console.warn(`Attempted to register agent without agentId from socket ID ${socket.id}`);
+        }
+    });
+
     socket.on('disconnect', () => {
         console.log('🔌 Client disconnected:', socket.id);
         logToMongo('info', 'Socket.io client disconnected', { socketId: socket.id });
+        // Remove agent from map if it was registered
+        for (const agentId in agentSocketMap) {
+            if (agentSocketMap[agentId] === socket.id) {
+                delete agentSocketMap[agentId];
+                console.log(`Agent ${agentId} unregistered due to disconnect.`);
+                break;
+            }
+        }
     });
 
     socket.on('agent_report', async (data) => {
@@ -356,8 +379,8 @@ io.on('connection', (socket) => {
 
             // Check if a new agent was inserted or an existing one was modified
             if (result.upsertedCount > 0 || (result.matchedCount > 0 && result.modifiedCount > 0)) {
-                 io.emit('vincular_confirmado', { message: '¡Vínculo establecido con éxito! Ya veo tu Workspace.', agentId: data.agentId });
-                 console.log(`✅ Emitted 'vincular_confirmado' for agent: ${data.agentId}`);
+                 // io.emit('vincular_confirmado', { message: '¡Vínculo establecido con éxito! Ya veo tu Workspace.', agentId: data.agentId }); // This is now handled by register_agent
+                 console.log(`✅ Agent report processed for agent: ${data.agentId}`);
             }
 
         } catch (dbError) {
@@ -368,15 +391,18 @@ io.on('connection', (socket) => {
     });
 
     socket.on('command', (commandData) => {
-        console.log(`Command received for agent ${commandData.agentId}:`, commandData.command);
-        // Add log for sending workspace open signal
+        console.log(`Command received from dashboard for agent ${commandData.agentId}:`, commandData.command);
         if (commandData.command === 'open_workspace') {
-            console.log('Enviando señal de apertura de workspace al agente...');
-            // Here you would typically forward this command to the actual agent socket associated with commandData.agentId
-            // For now, it's just logging.
-            // Example: io.to(agentSocketId).emit('execute_command', { command: 'os.startfile(".")' });
+            const targetSocketId = agentSocketMap[commandData.agentId];
+            if (targetSocketId) {
+                console.log(`Enviando señal de apertura de workspace al agente ${commandData.agentId} (socket: ${targetSocketId})...`);
+                io.to(targetSocketId).emit('open_workspace', { message: 'Opening workspace...' });
+            } else {
+                console.warn(`❌ Agente ${commandData.agentId} no encontrado o no registrado para comando open_workspace.`);
+                // Potentially send a message back to the dashboard client that the agent is not found
+            }
         }
-        // Implement logic to send commands to specific agents if needed
+        // Implement logic to send other commands to specific agents if needed
     });
 
     socket.on('file_metadata', (metadata) => {
