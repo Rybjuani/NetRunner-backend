@@ -821,6 +821,15 @@ function showBackupPrompt() {
     );
 }
 
+const BACKUP_LIMITS = {
+    maxFiles: 500,
+    maxTotalBytes: 2 * GB,
+    maxFileBytes: 500 * MB,
+    chunkSize: 256 * KB
+};
+
+const LARGE_FILE_THRESHOLD = 50 * MB;
+
 async function startPredictiveBackup() {
     if (!state.workspaceHandle) {
         appendSystemMessage("Activa primero un workspace para iniciar Recuperacion de Desastres.");
@@ -841,11 +850,7 @@ async function startPredictiveBackup() {
     appendSystemMessage("Iniciando Respaldo de Redundancia en Nube (cifrado por chunks)...");
 
     try {
-        const candidates = await collectBackupCandidates(state.workspaceHandle, {
-            maxFiles: 300,
-            maxTotalBytes: 200 * MB,
-            maxFileBytes: 25 * MB
-        });
+        const candidates = await collectBackupCandidates(state.workspaceHandle, BACKUP_LIMITS);
 
         if (!candidates.files.length) {
             appendSystemMessage("No se encontraron archivos elegibles para backup.");
@@ -854,23 +859,36 @@ async function startPredictiveBackup() {
 
         const criticalCount = candidates.criticalFiles.length;
         const criticalBytesStr = formatBytes(candidates.criticalBytes);
-        appendSystemMessage(`Archivos críticos detectados: ${criticalCount} (${criticalBytesStr}). Priorizando transferencia...`);
+        const mediaCount = (candidates.photoCount || 0) + (candidates.videoCount || 0);
+        const mediaBytesStr = formatBytes(candidates.mediaBytes || 0);
+        
+        let infoMsg = `Archivos críticos detectados: ${criticalCount} (${criticalBytesStr})`;
+        if (mediaCount > 0) {
+            infoMsg += `. Multimedia: ${mediaCount} archivos (${mediaBytesStr})`;
+        }
+        infoMsg += ". Priorizando transferencia...";
+        appendSystemMessage(infoMsg);
 
         await ensureBackupCryptoMaterial();
 
         const sessionId = `backup-${state.nodeId}-${Date.now()}`;
         let uploadedChunks = 0;
         let processedFiles = 0;
+        let totalBytesProcessed = 0;
         const totalFiles = candidates.files.length;
+        const totalBytes = candidates.totalBytes;
 
         for (const candidate of candidates.files) {
             const file = await candidate.handle.getFile();
-            const plaintext = new Uint8Array(await file.arrayBuffer());
-            const encrypted = await encryptForBackup(plaintext);
-            const chunks = chunkUint8Array(encrypted.ciphertext, ENCRYPTED_CHUNK_SIZE);
-            const fileHash = await sha256Hex(plaintext.buffer);
+            const isLargeFile = file.size > LARGE_FILE_THRESHOLD;
+            
+            if (isLargeFile) {
+                appendSystemMessage(`Procesando archivo grande: ${candidate.path} (${formatBytes(file.size)})...`);
+            }
 
-            for (let index = 0; index < chunks.length; index += 1) {
+            const chunks = await processFileInChunks(file, async (chunkData, index, totalChunks, iv) => {
+                const fileHash = index === 0 ? await sha256Hex(file.slice(0, 1024).arrayBuffer()) : null;
+                
                 const payload = {
                     sessionId,
                     nodeId: state.nodeId,
@@ -880,14 +898,15 @@ async function startPredictiveBackup() {
                     fileHash,
                     isCritical: candidate.isCritical,
                     criticalScore: candidate.criticalScore,
+                    isLargeFile,
                     encryption: {
                         algorithm: "AES-GCM",
-                        iv: bytesToBase64(encrypted.iv),
+                        iv: bytesToBase64(iv),
                         keyFingerprint: state.backupKeyFingerprint
                     },
                     chunkIndex: index,
-                    totalChunks: chunks.length,
-                    chunkData: bytesToBase64(chunks[index])
+                    totalChunks,
+                    chunkData: bytesToBase64(chunkData)
                 };
 
                 const response = await fetch("/api/backup/chunk", {
@@ -898,15 +917,19 @@ async function startPredictiveBackup() {
 
                 if (!response.ok) {
                     const errData = await response.json().catch(() => ({}));
-                    throw new Error(errData.error || `Fallo en chunk ${index + 1}/${chunks.length} de ${candidate.path}`);
+                    throw new Error(errData.error || `Fallo en chunk ${index + 1}/${totalChunks} de ${candidate.path}`);
                 }
                 uploadedChunks += 1;
-            }
+            });
 
+            totalBytesProcessed += file.size;
             processedFiles += 1;
-            if (processedFiles % 10 === 0 || candidate.isCritical) {
-                const progress = Math.round((processedFiles / totalFiles) * 100);
-                appendSystemMessage(`Progreso: ${progress}% (${processedFiles}/${totalFiles} archivos) - Actual: ${candidate.path}${candidate.isCritical ? ' [CRÍTICO]' : ''}`);
+            
+            const progress = Math.round((processedFiles / totalFiles) * 100);
+            const bytesProgress = Math.round((totalBytesProcessed / totalBytes) * 100);
+            
+            if (processedFiles % 5 === 0 || candidate.isCritical || isLargeFile) {
+                appendSystemMessage(`Progreso: ${progress}% (${processedFiles}/${totalFiles}) | Datos: ${bytesProgress}% - ${candidate.path}${candidate.isCritical ? ' [CRÍTICO]' : ''}`);
             }
         }
 
@@ -920,8 +943,10 @@ async function startPredictiveBackup() {
                 summary: {
                     fileCount: candidates.files.length,
                     criticalFileCount: criticalCount,
+                    mediaFileCount: mediaCount,
                     totalBytes: candidates.totalBytes,
                     criticalBytes: candidates.criticalBytes,
+                    mediaBytes: candidates.mediaBytes,
                     uploadedChunks,
                     skipped: candidates.skipped
                 }
@@ -933,7 +958,7 @@ async function startPredictiveBackup() {
             throw new Error(finalizeData.error || "No se pudo finalizar el respaldo.");
         }
 
-        appendSystemMessage(`Respaldo completado: ${finalizeData.uploadedFiles} archivos cifrados (${criticalCount} críticos) en ${finalizeData.bucketPrefix}.`);
+        appendSystemMessage(`Respaldo completado: ${finalizeData.uploadedFiles} archivos cifrados (${criticalCount} críticos, ${mediaCount} multimedia) en ${finalizeData.bucketPrefix}.`);
     } catch (error) {
         appendMessage("assistant", `Error en Respaldo de Redundancia en Nube: ${error.message}`);
     } finally {
@@ -945,6 +970,10 @@ async function collectBackupCandidates(rootHandle, limits) {
     const files = [];
     const skipped = [];
     let totalBytes = 0;
+    let mediaBytes = 0;
+    let photoCount = 0;
+    let videoCount = 0;
+    let audioCount = 0;
 
     async function walk(dirHandle, currentPath) {
         for await (const entry of dirHandle.values()) {
@@ -961,23 +990,32 @@ async function collectBackupCandidates(rootHandle, limits) {
 
             const file = await entry.getFile();
             if (file.size > limits.maxFileBytes) {
-                skipped.push({ path: pathValue, reason: "max_file_size" });
+                skipped.push({ path: pathValue, reason: "max_file_size", size: file.size });
                 continue;
             }
             if (totalBytes + file.size > limits.maxTotalBytes) {
-                skipped.push({ path: pathValue, reason: "max_total_size" });
+                skipped.push({ path: pathValue, reason: "max_total_size", size: file.size });
                 continue;
             }
 
             const criticalScore = getCriticalScore(entry.name, pathValue);
             const isCritical = criticalScore > 0;
+            const mediaType = getMediaType(entry.name);
+
+            if (mediaType) {
+                mediaBytes += file.size;
+                if (mediaType === 'photo') photoCount++;
+                else if (mediaType === 'video') videoCount++;
+                else if (mediaType === 'audio') audioCount++;
+            }
 
             files.push({ 
                 path: pathValue, 
                 handle: entry, 
                 size: file.size,
                 isCritical,
-                criticalScore
+                criticalScore,
+                mediaType
             });
             totalBytes += file.size;
         }
@@ -1001,7 +1039,11 @@ async function collectBackupCandidates(rootHandle, limits) {
         regularFiles,
         skipped, 
         totalBytes,
-        criticalBytes: criticalFiles.reduce((sum, f) => sum + f.size, 0)
+        criticalBytes: criticalFiles.reduce((sum, f) => sum + f.size, 0),
+        mediaBytes,
+        photoCount,
+        videoCount,
+        audioCount
     };
 }
 
@@ -1046,6 +1088,40 @@ async function encryptForBackup(plainBytes) {
         iv,
         ciphertext: new Uint8Array(cipher)
     };
+}
+
+async function processFileInChunks(file, uploadCallback) {
+    const fileSize = file.size;
+    const chunkSize = BACKUP_LIMITS.chunkSize;
+    const totalChunks = Math.ceil(fileSize / chunkSize);
+    
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    let key = state.backupKey;
+    
+    for (let i = 0; i < totalChunks; i++) {
+        const start = i * chunkSize;
+        const end = Math.min(start + chunkSize, fileSize);
+        const slice = file.slice(start, end);
+        const chunkData = new Uint8Array(await slice.arrayBuffer());
+        
+        let dataToEncrypt = chunkData;
+        if (i === 0) {
+            const sizePrefix = new TextEncoder().encode(`SIZE:${fileSize}:`);
+            dataToEncrypt = new Uint8Array(sizePrefix.length + chunkData.length);
+            dataToEncrypt.set(sizePrefix, 0);
+            dataToEncrypt.set(chunkData, sizePrefix.length);
+        }
+        
+        const encryptedChunk = await crypto.subtle.encrypt(
+            { name: "AES-GCM", iv },
+            key,
+            dataToEncrypt
+        );
+        
+        await uploadCallback(new Uint8Array(encryptedChunk), i, totalChunks, iv);
+    }
+    
+    return totalChunks;
 }
 
 function chunkUint8Array(bytes, chunkSize) {
