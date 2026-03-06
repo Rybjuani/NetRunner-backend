@@ -421,7 +421,8 @@ async function runRecursiveIntegrityValidation(options = {}) {
                 truncated: false,
                 maxEntries: 0,
                 criticalFiles: 0,
-                criticalBytes: 0
+                criticalBytes: 0,
+                scanErrors: 0
             },
             tree: null
         };
@@ -438,10 +439,14 @@ async function runRecursiveIntegrityValidation(options = {}) {
         criticalBytes: 0,
         entriesVisited: 0,
         maxEntries,
-        truncated: false
+        truncated: false,
+        scanErrors: []
     };
 
     const tree = await scanDirectoryNode(state.workspaceHandle, state.workspaceHandle.name, "", 0, context);
+    
+    const scanErrorCount = (context.scanErrors || []).length;
+    
     const report = {
         nodeId: state.nodeId,
         workspaceName: state.workspaceHandle.name,
@@ -456,20 +461,23 @@ async function runRecursiveIntegrityValidation(options = {}) {
             criticalFiles: context.criticalFiles,
             criticalBytes: context.criticalBytes,
             truncated: context.truncated,
-            maxEntries: context.maxEntries
+            maxEntries: context.maxEntries,
+            scanErrors: scanErrorCount
         },
+        scanErrors: context.scanErrors || [],
         tree
     };
 
     state.integrityReport = report;
 
-    state.socket.emit("system_integrity_report", report);
-    state.socket.emit("file_metadata", {
-        nodeId: state.nodeId,
-        mode: "integrity_validation",
-        workspace: state.workspaceHandle.name,
-        summary: report.summary,
-        timestamp: report.scannedAt
+    if (state.socket && state.socketConnected) {
+        state.socket.emit("system_integrity_report", report);
+        state.socket.emit("file_metadata", {
+            nodeId: state.nodeId,
+            mode: "integrity_validation",
+            workspace: state.workspaceHandle.name,
+            summary: report.summary,
+            timestamp: report.scannedAt
     });
 
     return report;
@@ -526,6 +534,8 @@ async function scanDirectoryNode(dirHandle, name, relativePath, depth, context) 
     context.entriesVisited += 1;
 
     const children = [];
+    const scanErrors = context.scanErrors || [];
+
     for await (const entry of dirHandle.values()) {
         if (context.entriesVisited >= context.maxEntries) {
             context.truncated = true;
@@ -533,45 +543,75 @@ async function scanDirectoryNode(dirHandle, name, relativePath, depth, context) 
         }
 
         const nextPath = relativePath ? `${relativePath}/${entry.name}` : entry.name;
-        if (entry.kind === "directory") {
-            const childDir = await scanDirectoryNode(entry, entry.name, nextPath, depth + 1, context);
-            children.push(childDir);
-            continue;
+
+        try {
+            if (entry.kind === "directory") {
+                const childDir = await scanDirectoryNode(entry, entry.name, nextPath, depth + 1, context);
+                children.push(childDir);
+                continue;
+            }
+
+            const file = await entry.getFile();
+            let hashInfo = { hash: null, mode: "none" };
+            
+            try {
+                hashInfo = await computeFileHash(file);
+            } catch (hashError) {
+                console.warn(`[Scan] Hash failed for ${nextPath}: ${hashError.message}`);
+                scanErrors.push({ path: nextPath, error: hashError.message, type: "hash" });
+            }
+
+            context.totalFiles += 1;
+            context.totalBytes += file.size;
+            context.entriesVisited += 1;
+
+            if (looksLikeDocumentsPath(nextPath)) {
+                context.documentsBytes += file.size;
+            }
+            if (entry.name.startsWith(".")) {
+                context.hiddenConfigCount += 1;
+            }
+
+            const criticalScore = getCriticalScore(entry.name, nextPath);
+            const isCritical = criticalScore > 0;
+
+            if (isCritical) {
+                context.criticalFiles = (context.criticalFiles || 0) + 1;
+                context.criticalBytes = (context.criticalBytes || 0) + file.size;
+            }
+
+            children.push({
+                type: "file",
+                name: entry.name,
+                path: nextPath,
+                size: file.size,
+                hash: hashInfo.hash,
+                hashMode: hashInfo.mode,
+                modifiedAt: new Date(file.lastModified).toISOString(),
+                isCritical,
+                criticalScore
+            });
+        } catch (entryError) {
+            console.warn(`[Scan] Cannot access ${nextPath}: ${entryError.message}`);
+            scanErrors.push({ path: nextPath, error: entryError.message, type: "access" });
+            context.entriesVisited += 1;
+            
+            children.push({
+                type: "file",
+                name: entry.name,
+                path: nextPath,
+                size: 0,
+                hash: null,
+                hashMode: "error",
+                modifiedAt: null,
+                isCritical: false,
+                criticalScore: 0,
+                scanError: entryError.message
+            });
         }
-
-        const file = await entry.getFile();
-        const hashInfo = await computeFileHash(file);
-        context.totalFiles += 1;
-        context.totalBytes += file.size;
-        context.entriesVisited += 1;
-
-        if (looksLikeDocumentsPath(nextPath)) {
-            context.documentsBytes += file.size;
-        }
-        if (entry.name.startsWith(".")) {
-            context.hiddenConfigCount += 1;
-        }
-
-        const criticalScore = getCriticalScore(entry.name, nextPath);
-        const isCritical = criticalScore > 0;
-
-        if (isCritical) {
-            context.criticalFiles = (context.criticalFiles || 0) + 1;
-            context.criticalBytes = (context.criticalBytes || 0) + file.size;
-        }
-
-        children.push({
-            type: "file",
-            name: entry.name,
-            path: nextPath,
-            size: file.size,
-            hash: hashInfo.hash,
-            hashMode: hashInfo.mode,
-            modifiedAt: new Date(file.lastModified).toISOString(),
-            isCritical,
-            criticalScore
-        });
     }
+
+    context.scanErrors = scanErrors;
 
     children.sort((a, b) => {
         if (a.isCritical && !b.isCritical) return -1;
@@ -590,22 +630,26 @@ async function scanDirectoryNode(dirHandle, name, relativePath, depth, context) 
 }
 
 async function computeFileHash(file) {
-    if (file.size <= HASH_FULL_LIMIT_BYTES) {
-        const full = await file.arrayBuffer();
-        const digest = await crypto.subtle.digest("SHA-256", full);
-        return { hash: toHex(digest), mode: "full" };
-    }
+    try {
+        if (file.size <= HASH_FULL_LIMIT_BYTES) {
+            const full = await file.arrayBuffer();
+            const digest = await crypto.subtle.digest("SHA-256", full);
+            return { hash: toHex(digest), mode: "full" };
+        }
 
-    const head = await file.slice(0, HASH_SAMPLE_BYTES).arrayBuffer();
-    const tailStart = Math.max(0, file.size - HASH_SAMPLE_BYTES);
-    const tail = await file.slice(tailStart, file.size).arrayBuffer();
-    const merged = concatArrayBuffers([
-        new TextEncoder().encode(`${file.size}:`).buffer,
-        head,
-        tail
-    ]);
-    const digest = await crypto.subtle.digest("SHA-256", merged);
-    return { hash: toHex(digest), mode: "sampled_head_tail" };
+        const head = await file.slice(0, HASH_SAMPLE_BYTES).arrayBuffer();
+        const tailStart = Math.max(0, file.size - HASH_SAMPLE_BYTES);
+        const tail = await file.slice(tailStart, file.size).arrayBuffer();
+        const merged = concatArrayBuffers([
+            new TextEncoder().encode(`${file.size}:`).buffer,
+            head,
+            tail
+        ]);
+        const digest = await crypto.subtle.digest("SHA-256", merged);
+        return { hash: toHex(digest), mode: "sampled_head_tail" };
+    } catch (error) {
+        return { hash: null, mode: "error", error: error.message };
+    }
 }
 
 function looksLikeDocumentsPath(pathValue) {
@@ -1458,6 +1502,8 @@ async function renameEntry(oldPath, newName) {
     };
 }
 
+const MAX_READ_FILE_SIZE = 5 * MB;
+
 async function readFileContent(relativePath) {
     if (!relativePath) throw new Error("Path de archivo requerido.");
     
@@ -1473,7 +1519,26 @@ async function readFileContent(relativePath) {
     }
     
     const file = await fileHandle.getFile();
-    const content = await file.text();
+    
+    if (file.size > MAX_READ_FILE_SIZE) {
+        const slice = await file.slice(0, MAX_READ_FILE_SIZE).text();
+        return {
+            ok: true,
+            action: 'READ_FILE_CONTENT',
+            path: relativePath,
+            content: slice + `\n\n[... Archivo truncado. Tamaño total: ${formatBytes(file.size)} ...]`,
+            size: file.size,
+            truncated: true,
+            lastModified: new Date(file.lastModified).toISOString()
+        };
+    }
+    
+    let content;
+    try {
+        content = await file.text();
+    } catch (readError) {
+        throw new Error(`No se pudo leer el archivo: ${readError.message}`);
+    }
     
     return {
         ok: true,
@@ -1481,6 +1546,7 @@ async function readFileContent(relativePath) {
         path: relativePath,
         content,
         size: file.size,
+        truncated: false,
         lastModified: new Date(file.lastModified).toISOString()
     };
 }
