@@ -3,6 +3,7 @@ import express from 'express';
 import { createServer } from 'http';
 import { Server as SocketIOServer } from 'socket.io';
 import multer from 'multer';
+import B2 from 'backblaze-b2'; // Reintroduce B2 import
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
@@ -11,6 +12,11 @@ import mongoose from 'mongoose';
 // --- CONFIGURATION ---
 const PORT = process.env.PORT || 3000;
 const MONGO_URL = process.env.MONGO_URL; // External MongoDB URL for Mongoose
+// Reintroduce B2 config variables
+const B2_APPLICATION_KEY_ID = process.env.B2_APPLICATION_KEY_ID;
+const B2_APPLICATION_KEY = process.env.B2_APPLICATION_KEY;
+const B2_BUCKET_NAME = process.env.B2_BUCKET_NAME;
+const B2_BUCKET_ID = process.env.B2_BUCKET_ID;
 
 // --- Initialize Express App and HTTP Server ---
 const app = express();
@@ -22,6 +28,26 @@ const io = new SocketIOServer(httpServer);
 // --- Initialize Multer (memory storage for direct B2 upload) ---
 const storage = multer.memoryStorage();
 const upload = multer({ storage: storage });
+
+// Reintroduce B2 initialization and authorization function
+let b2;
+async function authorizeB2() {
+    if (!B2_APPLICATION_KEY_ID || !B2_APPLICATION_KEY) {
+        console.warn("⚠️ Backblaze B2 credentials not provided. File uploads to B2 will not work.");
+        return;
+    }
+    b2 = new B2({
+        applicationKeyId: B2_APPLICATION_KEY_ID,
+        applicationKey: B2_APPLICATION_KEY
+    });
+    try {
+        await b2.authorize();
+        console.log("✅ Successfully authorized with Backblaze B2.");
+    } catch (err) {
+        console.error("❌ Error authorizing with Backblaze B2:", err.message);
+        b2 = null; // Mark B2 as unauthorized
+    }
+}
 
 // --- MongoDB Connection (Mongoose) ---
 
@@ -222,7 +248,7 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
         hostname: hostname,
         timestamp: new Date(),
         status: 'pending',
-        cloudPath: null // No cloud path as B2 is removed
+        cloudPath: null
     };
 
     try {
@@ -232,31 +258,56 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
             fileDoc._id = createdFileEntry._id;
         } catch (dbError) {
             console.error("❌ Error creating initial FileEntry:", dbError.message);
-            // Continue, will log error to fileDoc status later
+            // Continue with upload, will log error to fileDoc status later
         }
 
-        // Simulate successful local persistence, or mark as locally stored
-        logToMongo('info', `File received and metadata persisted locally: ${originalname}`, { file: originalname, agentId });
+        if (!b2 || !B2_BUCKET_NAME || !B2_BUCKET_ID) {
+            logToMongo('warn', 'Backblaze B2 not configured or authorized. Saving file metadata only.', { file: originalname, agentId });
+            if (createdFileEntry) {
+                await FileEntry.updateOne(
+                    { _id: createdFileEntry._id },
+                    { $set: { status: 'b2_unconfigured', error: 'B2 not configured or authorized' } }
+                );
+            }
+            return res.status(500).send('Backblaze B2 not configured or authorized for uploads.');
+        }
+
+        logToMongo('info', `Attempting to upload file to B2: ${originalname}`, { file: originalname, agentId });
+
+	const fileInfo = await b2.getUploadUrl({ bucketId: B2_BUCKET_ID }); 
+	const uploadUrl = fileInfo.data.uploadUrl;
+	const authToken = fileInfo.data.authorizationToken;
+
+	const b2UploadResult = await b2.uploadFile({
+	    uploadUrl: uploadUrl,
+	    uploadAuthToken: authToken,
+	    fileName: `${agentId}/${Date.now()}-${originalname}`,
+	    data: buffer,
+	    mime: mimetype
+});
+
+        const cloudPath = b2UploadResult.data.fileName;
+        logToMongo('info', `File uploaded successfully to B2: ${cloudPath}`, { file: originalname, agentId, cloudPath });
 
         if (createdFileEntry) {
             await FileEntry.updateOne(
                 { _id: createdFileEntry._id },
-                { $set: { status: 'persisted_locally', persistedAt: new Date() } }
+                { $set: { status: 'persisted', cloudPath: cloudPath, persistedAt: new Date() } }
             );
         }
 
-        res.status(200).send({ message: `File ${originalname} received and metadata recorded locally.`, cloudPath: null }); // cloudPath is null
+        res.status(200).send({ message: `File ${originalname} uploaded successfully to B2.`, cloudPath: cloudPath });
 
     } catch (error) {
-        console.error('❌ Error during file upload processing:', error);
-        logToMongo('error', `Failed to process file upload: ${originalname}`, { file: originalname, agentId, error: error.message });
+        console.error('❌ Error during file upload to B2:', error);
+        logToMongo('error', `Failed to upload file to B2: ${originalname}`, { file: originalname, agentId, error: error.message });
         if (fileDoc._id) {
             await FileEntry.updateOne(
                 { _id: fileDoc._id },
                 { $set: { status: 'failed', error: error.message } }
             );
         }
-        res.status(500).send('Error processing file upload.');
+        res.status(500).send('Error uploading file to Backblaze B2.');
     }
 });
 
@@ -311,6 +362,7 @@ io.on('connection', (socket) => {
 
 // --- Server Start ---
 async function startServer() {
+    await authorizeB2(); // Reintroduce B2 authorization
     await connectMongo();
 
 
