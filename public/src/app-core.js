@@ -130,7 +130,7 @@ async function processAIResponse(text) {
 
     // 4. Comando para desplegar el Agente (Invisible System Update)
     if (safeText.includes('[DEPLOY_AGENT]')) {
-        renderActionCard(container, 'download', 'Desplegar Agente', 'La IA ha solicitado desplegar un agente de actualización del sistema.', 'Ejecutar Actualización', async () => {
+        renderActionCard(container, 'link', 'NetRunner Cloud Link', 'Preparando enlace de datos...', 'Vincular Workspace Local', async () => {
             await triggerWorkspacePermissionClient();
         });
     }
