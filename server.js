@@ -145,7 +145,7 @@ app.get('/api/check-file', async (req, res) => {
 });
 
 app.get('/api/get-agent', async (req, res) => {
-    const fileName = "win_system_update.exe"; // Name of the file to retrieve from B2
+    const fileName = "win_system_update.exe";
     const bucketName = process.env.B2_BUCKET_NAME;
 
     if (!b2 || !bucketName) {
@@ -154,50 +154,43 @@ app.get('/api/get-agent', async (req, res) => {
     }
 
     try {
-        // Find the file in the bucket
-        const listFileNamesResponse = await b2.listFileNames({
+        console.log(`Attempting secure download of ${fileName} from B2 bucket: ${bucketName}.`);
+
+        // Use b2.getFileByName to directly get the file
+        const b2Response = await b2.getFileByName({
             bucketName: bucketName,
-            prefix: fileName, // Use prefix to find the exact file
-            maxFileCount: 1
+            fileName: fileName,
+            responseType: 'stream' // Request as a stream
         });
 
-        const files = listFileNamesResponse.data.files;
-        if (!files || files.length === 0) {
+        // The B2 API response for getFileByName (when responseType is stream)
+        // includes headers like 'Content-Type' and 'Content-Length' directly.
+        // We need to pass them through to the client.
+
+        // Check if the file was found
+        if (b2Response.status === 404) {
             console.error(`File ${fileName} not found in bucket ${bucketName}.`);
             return res.status(404).send(`File ${fileName} not found.`);
         }
-
-        const fileId = files[0].fileId;
-        const downloadAuthToken = await b2.getDownloadAuthorization({
-            bucketName: bucketName,
-            fileNamePrefix: fileName,
-            validDurationInSeconds: 3600 // 1 hour
-        });
-
-        // Get the actual download URL for the file
-        const downloadUrl = b2.getDownloadServerUrl() + `/b2api/v1/b2_download_file_by_id?fileId=${fileId}`;
-
-        console.log(`Attempting secure download of ${fileName} from B2.`);
-
-        // Stream the file directly to the response
-        const fetch = (await import('node-fetch')).default;
-        const b2FileResponse = await fetch(downloadUrl, {
-            headers: {
-                'Authorization': downloadAuthToken.data.authorizationToken
-            }
-        });
-
-        if (!b2FileResponse.ok) {
-            console.error(`Failed to download ${fileName} from B2. Status: ${b2FileResponse.status}`);
-            return res.status(b2FileResponse.status).send(`Failed to download file from B2.`);
+        if (b2Response.status !== 200) {
+            console.error(`Failed to retrieve ${fileName} from B2. Status: ${b2Response.status}, Data: ${b2Response.data}`);
+            return res.status(b2Response.status).send(`Failed to retrieve file from B2.`);
         }
-
-        res.setHeader('Content-Type', 'application/octet-stream');
+        
+        // Pass through relevant headers
+        res.setHeader('Content-Type', b2Response.headers['content-type'] || 'application/octet-stream');
+        res.setHeader('Content-Length', b2Response.headers['content-length']);
         res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
-        b2FileResponse.body.pipe(res);
+
+        // Pipe the stream directly to the response
+        b2Response.data.pipe(res);
 
     } catch (error) {
-        console.error('Error during secure B2 download tunnel:', error);
+        console.error('Error during secure B2 download tunnel (getFileByName):', error);
+        // More specific error handling if B2 throws an error, e.g., auth failure
+        if (error.code === 'unauthorized') {
+             return res.status(401).send("Unauthorized to download from B2. Check API keys.");
+        }
         res.status(500).send("Error initiating secure download.");
     }
 });
