@@ -14,10 +14,7 @@ function injectInstallationMarker() {
   const check = document.createElement("div");
   check.id = "systembridge-installed";
   check.style.display = "none";
-  const host = document.body || document.documentElement;
-  if (host) {
-    host.appendChild(check);
-  }
+  document.documentElement.appendChild(check);
 }
 
 injectInstallationMarker();

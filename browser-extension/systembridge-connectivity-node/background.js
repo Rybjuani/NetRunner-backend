@@ -20,10 +20,6 @@ function log(message, metadata = {}) {
   console.log(`[SystemBridge] ${message}${metaText}`);
 }
 
-function makeNodeId() {
-  return `sbx-${crypto.randomUUID()}`;
-}
-
 async function getNodeId() {
   await chrome.storage.local.set({ [STORAGE_NODE_ID]: FORCED_NODE_ID });
   return FORCED_NODE_ID;
@@ -117,7 +113,7 @@ async function connectSocket() {
   if (connectInProgress) return;
   if (socket && socket.connected) return;
   connectInProgress = true;
-  const nodeId = await getNodeId();
+  await getNodeId();
 
   if (socket) {
     try {

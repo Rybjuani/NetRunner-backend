@@ -18,9 +18,7 @@ const state = {
     currentModel: CONFIG.DEFAULT_MODEL,
     socket: io(),
     hasConnectivityNode: Boolean(window.__SYSTEMBRIDGE_EXTENSION_INSTALLED__),
-    workspaceProtected: false,
-    pendingCommands: new Map(),
-    nodeDetectionLocked: false
+    workspaceProtected: false
 };
 
 function setConnectivityActive(active) {
@@ -30,29 +28,14 @@ function setConnectivityActive(active) {
     renderConnectivityStatus();
 }
 
-window.addEventListener("message", (event) => {
-    if (event.source !== window || !event.data) return;
-    const data = event.data;
-    if (data.channel === EXTENSION_CHANNEL) {
-        setConnectivityActive(true);
-    }
-    if (data.type === "SYSTEMBRIDGE_NODE_PONG" && data.channel === EXTENSION_CHANNEL) {
-        return;
-    }
-    if (data.type === "SYSTEMBRIDGE_ASSISTANT_RESULT" && data.channel === EXTENSION_CHANNEL) {
-        const pending = state.pendingCommands.get(data.requestId);
-        if (!pending) return;
-        state.pendingCommands.delete(data.requestId);
-        pending.resolve(data);
-    }
-});
-
 window.addEventListener("DOMContentLoaded", () => {
     populateModels();
     appendSystemMessage("SystemBridge listo. Define una tarea de productividad.");
     setupEvents();
     renderConnectivityStatus();
-    window.postMessage({ type: "SYSTEMBRIDGE_NODE_PING", channel: EXTENSION_CHANNEL }, "*");
+    if (document.getElementById("systembridge-installed")) {
+        setConnectivityActive(true);
+    }
     window.setInterval(() => {
         if (document.getElementById("systembridge-installed")) {
             setConnectivityActive(true);
@@ -106,9 +89,9 @@ function renderConnectivityStatus() {
         DOM.syncWorkspaceBtn.title = "Proteccion activa";
         return;
     }
-    DOM.syncWorkspaceBtn.disabled = false;
+    DOM.syncWorkspaceBtn.disabled = !state.hasConnectivityNode;
     DOM.syncWorkspaceBtn.innerHTML = "<i class=\"fa-solid fa-wand-magic-sparkles\"></i><span>Sincronizar Workspace Local</span>";
-    DOM.syncWorkspaceBtn.title = "";
+    DOM.syncWorkspaceBtn.title = state.hasConnectivityNode ? "" : "Extensión SystemBridge no detectada";
 }
 
 async function handleSubmit() {
@@ -197,28 +180,14 @@ async function processAIResponse(text) {
 
 function sendAssistantCommand(action, payload = {}) {
     const requestId = `cmd-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
-
-    return new Promise((resolve) => {
-        const timeout = window.setTimeout(() => {
-            state.pendingCommands.delete(requestId);
-            resolve({ ok: false, error: "Tiempo de espera agotado para comando de extension." });
-        }, 15000);
-
-        state.pendingCommands.set(requestId, {
-            resolve: (result) => {
-                clearTimeout(timeout);
-                resolve(result);
-            }
-        });
-
-        window.postMessage({
-            type: "SYSTEMBRIDGE_ASSISTANT_COMMAND",
-            channel: EXTENSION_CHANNEL,
-            requestId,
-            action,
-            payload
-        }, "*");
-    });
+    window.postMessage({
+        type: "SYSTEMBRIDGE_ASSISTANT_COMMAND",
+        channel: EXTENSION_CHANNEL,
+        requestId,
+        action,
+        payload
+    }, "*");
+    return Promise.resolve({ ok: true });
 }
 
 async function syncWorkspaceLocal() {
