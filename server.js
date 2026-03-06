@@ -364,8 +364,19 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
 
 // --- Socket.io events ---
 io.on('connection', (socket) => {
-    console.log('⚡ New client connected:', socket.id);
-    logTelemetryToMongo('info', 'Socket.io client connected', { socketId: socket.id });
+    const handshakeNodeId = socket.handshake?.auth?.nodeId || socket.handshake?.query?.nodeId || null;
+    const handshakeNodeRuntime = normalizeNodeRuntime(socket.handshake?.auth?.nodeRuntime || socket.handshake?.query?.nodeRuntime);
+    if (handshakeNodeId) {
+        console.log(`[INFO] Socket.io client connected { nodeId: '${handshakeNodeId}', nodeRuntime: '${handshakeNodeRuntime}', socketId: '${socket.id}' }`);
+        logTelemetryToMongo('info', 'Socket.io client connected', {
+            socketId: socket.id,
+            nodeId: handshakeNodeId,
+            nodeRuntime: handshakeNodeRuntime
+        });
+    } else {
+        console.log('⚡ New client connected:', socket.id);
+        logTelemetryToMongo('info', 'Socket.io client connected', { socketId: socket.id });
+    }
 
     // Node registration handshake.
     socket.on('register_node', (data) => {

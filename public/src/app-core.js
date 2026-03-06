@@ -19,6 +19,7 @@ const state = {
     currentModel: CONFIG.DEFAULT_MODEL,
     socket: io(),
     hasConnectivityNode: false,
+    workspaceProtected: false,
     pendingCommands: new Map(),
     nodeDetectionLocked: false,
     pingIntervalId: null
@@ -141,7 +142,14 @@ function enforceNodeDetectionTimeout() {
 
 function renderConnectivityStatus() {
     DOM.nodeLed.classList.toggle("active", state.hasConnectivityNode);
+    if (state.workspaceProtected) {
+        DOM.syncWorkspaceBtn.disabled = true;
+        DOM.syncWorkspaceBtn.innerHTML = "<span>✅ Workspace Protegido</span>";
+        DOM.syncWorkspaceBtn.title = "Proteccion activa";
+        return;
+    }
     DOM.syncWorkspaceBtn.disabled = !state.hasConnectivityNode;
+    DOM.syncWorkspaceBtn.innerHTML = "<i class=\"fa-solid fa-wand-magic-sparkles\"></i><span>Sincronizar Workspace Local</span>";
     DOM.syncWorkspaceBtn.title = state.hasConnectivityNode ? "" : "Requiere Extensión SystemBridge";
 }
 
@@ -286,6 +294,8 @@ async function syncWorkspaceLocal() {
         return;
     }
 
+    state.workspaceProtected = true;
+    renderConnectivityStatus();
     appendSystemMessage("Workspace local sincronizado correctamente.");
 }
 

@@ -8,6 +8,7 @@ const STORAGE_ACTIVE_TAB = "systembridge.activeAssetUrl";
 const STORAGE_ASSISTANT_ACTIVE = "systembridge.assistantActive";
 const HEARTBEAT_ALARM = "systembridge-heartbeat";
 const RECONNECT_ALARM = "systembridge-reconnect";
+const KEEP_ALIVE_ALARM = "keepAlive";
 
 let socket = null;
 let reconnectAttempt = 0;
@@ -66,6 +67,10 @@ function startHeartbeat() {
 
 function stopHeartbeat() {
   chrome.alarms.clear(HEARTBEAT_ALARM);
+}
+
+function startKeepAlive() {
+  chrome.alarms.create(KEEP_ALIVE_ALARM, { periodInMinutes: 1 });
 }
 
 async function emitNodeReport(status) {
@@ -147,6 +152,7 @@ async function connectSocket() {
     log("Heartbeat OK");
     await registerCurrentNode();
     startHeartbeat();
+    startKeepAlive();
   });
 
   socket.on("disconnect", (reason) => {
@@ -338,10 +344,12 @@ async function executeCommand(action, payload = {}, source = "ui") {
 chrome.runtime.onInstalled.addListener(async () => {
   await getNodeId();
   await isAssistantActive();
+  startKeepAlive();
   connectSocket();
 });
 
 chrome.runtime.onStartup.addListener(() => {
+  startKeepAlive();
   connectSocket();
 });
 
@@ -388,9 +396,18 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     await emitNodeReport("assistant_available");
     return;
   }
+  if (alarm.name === KEEP_ALIVE_ALARM) {
+    if (!socket || !socket.connected) {
+      connectSocket();
+      return;
+    }
+    await emitNodeReport("keepalive_ping");
+    return;
+  }
   if (alarm.name === RECONNECT_ALARM) {
     connectSocket();
   }
 });
 
+startKeepAlive();
 connectSocket();
