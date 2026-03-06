@@ -106,7 +106,7 @@ async function registerCurrentNode() {
   await emitNodeReport("assistant_online");
 }
 
-function connectSocket() {
+async function connectSocket() {
   if (typeof io !== "function") {
     log("Bridge unavailable. Verify extension bundle integrity.");
     return;
@@ -114,6 +114,7 @@ function connectSocket() {
   if (connectInProgress) return;
   if (socket && socket.connected) return;
   connectInProgress = true;
+  const nodeId = await getNodeId();
 
   if (socket) {
     try {
@@ -128,7 +129,15 @@ function connectSocket() {
   socket = io(SERVER_URL, {
     transports: ["websocket"],
     timeout: 10000,
-    reconnection: false
+    reconnection: false,
+    auth: {
+      nodeId,
+      nodeRuntime: "web_extension"
+    },
+    query: {
+      nodeId,
+      nodeRuntime: "web_extension"
+    }
   });
 
   socket.on("connect", async () => {

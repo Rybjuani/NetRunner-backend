@@ -2,7 +2,6 @@ import { io } from "https://cdn.socket.io/4.3.2/socket.io.esm.min.js";
 
 const EXTENSION_CHANNEL = "SYSTEMBRIDGE_CONNECTIVITY_NODE";
 const RAILWAY_ORIGIN = "https://systembridge-pro.up.railway.app";
-const BRIDGE_GUIDE_URL = "https://github.com/Rybjuani/NetRunner-backend/tree/main/browser-extension/systembridge-connectivity-node";
 const NODE_PING_INTERVAL_MS = 3000;
 
 const DOM = {
@@ -10,9 +9,7 @@ const DOM = {
     form: document.getElementById("chat-form"),
     input: document.getElementById("user-input"),
     modelSelect: document.getElementById("model-select"),
-    nodeStatusCard: document.getElementById("node-status-card"),
-    nodeStatusText: document.getElementById("node-status-text"),
-    statusCollapseBtn: document.getElementById("status-collapse-btn"),
+    nodeLed: document.getElementById("node-led"),
     syncWorkspaceBtn: document.getElementById("sync-workspace-btn")
 };
 
@@ -91,10 +88,6 @@ function setupEvents() {
     DOM.syncWorkspaceBtn.addEventListener("click", async () => {
         await syncWorkspaceLocal();
     });
-
-    DOM.statusCollapseBtn.addEventListener("click", () => {
-        DOM.nodeStatusCard.classList.toggle("collapsed");
-    });
 }
 
 function sendNodePing() {
@@ -134,13 +127,6 @@ function setupConnectivityNodeStatusListener() {
             startBridgePingLoop();
         }
         renderConnectivityStatus();
-
-        if (!installed) {
-            appendSystemMessage("Nodo de Conectividad Desactivado.");
-            return;
-        }
-
-        appendSystemMessage("Asistente Activo - Sincronizado con Railway.");
     });
 }
 
@@ -154,13 +140,8 @@ function enforceNodeDetectionTimeout() {
 }
 
 function renderConnectivityStatus() {
-    DOM.nodeStatusCard.classList.toggle("connected", state.hasConnectivityNode);
-    DOM.nodeStatusCard.classList.toggle("disconnected", !state.hasConnectivityNode);
-    DOM.nodeStatusText.textContent = state.hasConnectivityNode
-        ? "Asistente Activo - Sincronizado con Railway"
-        : "Nodo de Conectividad Desactivado";
+    DOM.nodeLed.classList.toggle("active", state.hasConnectivityNode);
     DOM.syncWorkspaceBtn.disabled = !state.hasConnectivityNode;
-    DOM.syncWorkspaceBtn.dataset.tooltip = state.hasConnectivityNode ? "" : "Requiere Extensión SystemBridge";
     DOM.syncWorkspaceBtn.title = state.hasConnectivityNode ? "" : "Requiere Extensión SystemBridge";
 }
 
@@ -287,7 +268,7 @@ async function syncWorkspaceLocal() {
     if (!state.hasConnectivityNode) {
         appendMessage(
             "assistant",
-            `Para completar la sincronización segura, asegúrate de tener la extensión instalada y activa. [Enlace a Guía] ${BRIDGE_GUIDE_URL}`
+            "Preparando entorno seguro... por favor, asegúrate de que tu Asistente SystemBridge este activo en el navegador."
         );
         return;
     }

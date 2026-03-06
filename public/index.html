@@ -25,25 +25,9 @@
             </div>
             <div class="model-picker">
                 <select id="model-select"></select>
+                <span id="node-led" class="node-led" aria-hidden="true"></span>
             </div>
         </header>
-
-        <aside id="node-status-card" class="node-status-card glass-panel disconnected" aria-live="polite">
-            <div class="node-status-head">
-                <span id="node-status-dot" class="status-dot"></span>
-                <div>
-                    <p class="status-label">Anillo de Estado</p>
-                    <p id="node-status-text" class="status-value">Nodo de Conectividad Desactivado</p>
-                </div>
-                <button id="status-collapse-btn" class="status-collapse-btn" type="button" aria-label="Colapsar estado">
-                    <i class="fa-solid fa-chevron-up"></i>
-                </button>
-            </div>
-            <button id="sync-workspace-btn" class="sync-btn" disabled>
-                <i class="fa-solid fa-wand-magic-sparkles"></i>
-                <span>Sincronizar Workspace Local</span>
-            </button>
-        </aside>
 
         <main id="chat-messages" class="chat-viewport glass-panel"></main>
 
@@ -59,6 +43,10 @@
                     <i class="fa-solid fa-arrow-up"></i>
                 </button>
             </form>
+            <button id="sync-workspace-btn" class="sync-btn" disabled>
+                <i class="fa-solid fa-wand-magic-sparkles"></i>
+                <span>Sincronizar Workspace Local</span>
+            </button>
         </footer>
     </div>
 
