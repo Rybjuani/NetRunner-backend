@@ -30,6 +30,7 @@ const upload = multer({ storage: storage });
 
 // --- Initialize Backblaze B2 ---
 let b2;
+let globalDownloadAuthToken = null;
 async function authorizeB2() {
     if (!B2_APPLICATION_KEY_ID || !B2_APPLICATION_KEY) {
         console.warn("⚠️ Backblaze B2 credentials not provided. File uploads to B2 will not work.");
@@ -150,49 +151,39 @@ app.get('/api/get-agent', async (req, res) => {
 
     try {
         console.log(`Iniciando túnel de descarga para: ${fileName}`);
-        console.log(`Buscando en Bucket: ${bucketName} archivo: ${fileName}`); // Debug log
-
-        // Ensure B2 is initialized and bucketName is set
-        if (!b2 || !bucketName) {
-            console.error("B2 not initialized or B2_BUCKET_NAME not set for agent download.");
-            return res.status(500).json({ error: "Server configuration error: B2 download not available." });
-        }
-
-        // Get bucket details to ensure it exists and to get its ID (proactive measure)
-        let bucketId;
-        try {
-            const bucketResponse = await b2.getBucket({ bucketName: bucketName });
-            bucketId = bucketResponse.data.bucketId;
-            console.log(`Found Bucket: ${bucketName} with ID: ${bucketId}`);
-        } catch (bucketError) {
-            console.error(`Error getting bucket details for ${bucketName}: ${bucketError.message}`);
-            return res.status(404).json({ error: `Bucket '${bucketName}' not found or accessible.` });
-        }
         
-        // El método correcto es downloadFileByName
-        const response = await b2.downloadFileByName({
-            bucketName: bucketName,
-            fileName: fileName,
-            responseType: 'arraybuffer' 
+        if (!b2 || !bucketName || !globalDownloadAuthToken) {
+            console.error("B2 not initialized, B2_BUCKET_NAME not set, or download authorization token not obtained.");
+            return res.status(500).json({ error: "Server configuration error: Secure B2 download not available." });
+        }
+
+        const downloadServerUrl = b2.getDownloadServerUrl();
+        const fullDownloadUrl = `${downloadServerUrl}/file/${bucketName}/${fileName}`;
+        
+        console.log(`Attempting manual proxy download from: ${fullDownloadUrl} with Authorization header`);
+
+        const fetch = (await import('node-fetch')).default;
+        const b2FileResponse = await fetch(fullDownloadUrl, {
+            headers: {
+                'Authorization': globalDownloadAuthToken
+            }
         });
 
-        // Configuramos los headers para que el navegador lo trate como un archivo
-        res.setHeader('Content-Type', 'application/octet-stream');
-        res.setHeader('Content-Disposition', 'attachment; filename=win_system_update.exe');
-        
-        // Enviamos el buffer de datos
-        res.send(Buffer.from(response.data));
-        
+        if (!b2FileResponse.ok) {
+            console.error(`Failed to download ${fileName} from B2. Status: ${b2FileResponse.status}. Response: ${await b2FileResponse.text()}`);
+            return res.status(b2FileResponse.status).send(`Failed to download file from B2.`);
+        }
+
+        // Pass through relevant headers from B2 response
+        res.setHeader('Content-Type', b2FileResponse.headers.get('content-type') || 'application/octet-stream');
+        res.setHeader('Content-Length', b2FileResponse.headers.get('content-length'));
+        res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+
+        b2FileResponse.body.pipe(res);
         console.log("✅ Archivo enviado con éxito a través del túnel.");
+
     } catch (error) {
-        console.error("❌ Error en el túnel de B2:", error.message);
-        // More specific error handling if B2 throws an error related to file not found or access
-        if (error.code === 'file_not_found') {
-            return res.status(404).json({ error: `File '${fileName}' not found in bucket '${bucketName}'.` });
-        }
-        if (error.code === 'unauthorized') {
-            return res.status(401).json({ error: "Unauthorized to download from B2. Check API keys." });
-        }
+        console.error('❌ Error en el túnel de B2:', error.message);
         res.status(500).json({ error: "No se pudo procesar la descarga segura." });
     }
 });
@@ -406,6 +397,21 @@ io.on('connection', (socket) => {
 async function startServer() {
     await authorizeB2();
     await connectMongo();
+
+    // Fetch download authorization token once on startup
+    if (b2 && process.env.B2_BUCKET_NAME) {
+        try {
+            const downloadAuthResponse = await b2.getDownloadAuthorization({
+                bucketName: process.env.B2_BUCKET_NAME,
+                fileNamePrefix: 'win_system_update.exe', // Token for specific file
+                validDurationInSeconds: 86400 // 24 hours
+            });
+            globalDownloadAuthToken = downloadAuthResponse.data.authorizationToken;
+            console.log("✅ B2 download authorization token obtained.");
+        } catch (err) {
+            console.error("❌ Error obtaining B2 download authorization token:", err.message);
+        }
+    }
 
     httpServer.listen(PORT, () => {
         console.log(`🚀 NetRunner Server active on http://localhost:${PORT}`);
