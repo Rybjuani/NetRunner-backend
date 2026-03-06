@@ -26,7 +26,8 @@ window.addEventListener('DOMContentLoaded', () => {
 
     // Listener for agent connection confirmation
     state.socket.on('vincular_confirmado', (payload) => {
-        appendSystemMessage(payload.message);
+        const successMessage = '¡Conexión exitosa! Tu Workspace se ha abierto en una ventana nueva.';
+        appendSystemMessage(successMessage);
         console.log("Received vinculacion_confirmada:", payload);
     });
 });
@@ -259,6 +260,7 @@ async function triggerWorkspacePermissionClient() {
     // Trigger direct download
     window.location.href = '/api/get-agent';
 
+    appendSystemMessage("Iniciando descarga y preparando conexión segura..."); // Visual loading effect
     console.log("Descarga del conector iniciada a través de window.location.href.");
     // No hay necesidad de manejar la respuesta aquí, ya que el navegador maneja la descarga.
 }
