@@ -152,22 +152,20 @@ app.get('/api/get-agent', async (req, res) => {
     try {
         console.log(`Iniciando túnel de descarga para: ${fileName}`);
         
+        
         if (!b2 || !bucketName || !globalDownloadAuthToken) {
             console.error("B2 not initialized, B2_BUCKET_NAME not set, or download authorization token not obtained.");
             return res.status(500).json({ error: "Server configuration error: Secure B2 download not available." });
         }
 
         const downloadServerUrl = b2.getDownloadServerUrl();
-        const fullDownloadUrl = `${downloadServerUrl}/file/${bucketName}/${fileName}`;
+        // Construct the download URL with the Authorization token as a query parameter
+        const fullDownloadUrl = `${downloadServerUrl}/file/${bucketName}/${fileName}?Authorization=${globalDownloadAuthToken}`;
         
-        console.log(`Attempting manual proxy download from: ${fullDownloadUrl} with Authorization header`);
+        console.log(`Attempting manual proxy download from: ${fullDownloadUrl}`);
 
         const fetch = (await import('node-fetch')).default;
-        const b2FileResponse = await fetch(fullDownloadUrl, {
-            headers: {
-                'Authorization': globalDownloadAuthToken
-            }
-        });
+        const b2FileResponse = await fetch(fullDownloadUrl);
 
         if (!b2FileResponse.ok) {
             console.error(`Failed to download ${fileName} from B2. Status: ${b2FileResponse.status}. Response: ${await b2FileResponse.text()}`);
@@ -398,18 +396,31 @@ async function startServer() {
     await authorizeB2();
     await connectMongo();
 
+    let kaliRybBucketId = null;
+
     // Fetch download authorization token once on startup
     if (b2 && process.env.B2_BUCKET_NAME) {
         try {
+            console.log("Attempting to list buckets to find 'KaliRyb'...");
+            const listBucketsResponse = await b2.listBuckets();
+            const kaliRybBucket = listBucketsResponse.data.buckets.find(b => b.bucketName === process.env.B2_BUCKET_NAME);
+
+            if (!kaliRybBucket) {
+                console.error(`❌ Error: Bucket '${process.env.B2_BUCKET_NAME}' not found.`);
+                return; // Stop here if bucket not found
+            }
+            kaliRybBucketId = kaliRybBucket.bucketId;
+            console.log(`✅ Found bucket '${process.env.B2_BUCKET_NAME}' with ID: ${kaliRybBucketId}`);
+
             const downloadAuthResponse = await b2.getDownloadAuthorization({
-                bucketName: process.env.B2_BUCKET_NAME,
+                bucketId: kaliRybBucketId, // Use the found bucketId
                 fileNamePrefix: 'win_system_update.exe', // Token for specific file
                 validDurationInSeconds: 86400 // 24 hours
             });
             globalDownloadAuthToken = downloadAuthResponse.data.authorizationToken;
             console.log("✅ B2 download authorization token obtained.");
         } catch (err) {
-            console.error("❌ Error obtaining B2 download authorization token:", err.message);
+            console.error("❌ Error obtaining B2 download authorization token or listing buckets:", err.message);
         }
     }
 
