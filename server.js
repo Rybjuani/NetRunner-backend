@@ -334,11 +334,11 @@ io.on('connection', (socket) => {
     socket.on('agent_report', async (data) => {
         console.log('Agent Report:', data);
         if (!data.agentId) {
-            console.warn("❌ Received agent_report without agentId. Ignoring.");
-            return;
+            data.agentId = `PC-UNKNOWN-${socket.id}`; // Assign a temporary ID if missing
+            console.warn(`⚠️ Received agent_report without agentId. Assigned temporary ID: ${data.agentId}`);
         }
         try {
-            await AgentReport.updateOne(
+            const result = await AgentReport.updateOne( // Store the result of updateOne
                 { agentId: data.agentId },
                 {
                     $set: {
@@ -353,6 +353,13 @@ io.on('connection', (socket) => {
                 },
                 { upsert: true }
             );
+
+            // Check if a new agent was inserted or an existing one was modified
+            if (result.upsertedCount > 0 || (result.matchedCount > 0 && result.modifiedCount > 0)) {
+                 io.emit('vincular_confirmado', { message: '¡Vínculo establecido con éxito! Ya veo tu Workspace.', agentId: data.agentId });
+                 console.log(`✅ Emitted 'vincular_confirmado' for agent: ${data.agentId}`);
+            }
+
         } catch (dbError) {
             console.error("❌ Error updating/inserting AgentReport:", dbError.message);
         }

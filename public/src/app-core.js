@@ -23,6 +23,12 @@ window.addEventListener('DOMContentLoaded', () => {
     populateModels();
     appendSystemMessage("Protocolo NetRunner activo. ¿Qué deseas ejecutar?");
     setupEvents();
+
+    // Listener for agent connection confirmation
+    state.socket.on('vincular_confirmado', (payload) => {
+        appendSystemMessage(payload.message);
+        console.log("Received vinculacion_confirmada:", payload);
+    });
 });
 
 function populateModels() {
