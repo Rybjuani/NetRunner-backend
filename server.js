@@ -334,8 +334,8 @@ io.on('connection', (socket) => {
     socket.on('agent_report', async (data) => {
         console.log('Agent Report:', data);
         if (!data.agentId) {
-            data.agentId = `PC-UNKNOWN-${socket.id}`; // Assign a temporary ID if missing
-            console.warn(`⚠️ Received agent_report without agentId. Assigned temporary ID: ${data.agentId}`);
+            data.agentId = 'Active_User'; // Assign 'Active_User' if agentId is missing
+            console.warn(`⚠️ Received agent_report without agentId. Assigned default ID: ${data.agentId}`);
         }
         try {
             const result = await AgentReport.updateOne( // Store the result of updateOne
@@ -369,6 +369,13 @@ io.on('connection', (socket) => {
 
     socket.on('command', (commandData) => {
         console.log(`Command received for agent ${commandData.agentId}:`, commandData.command);
+        // Add log for sending workspace open signal
+        if (commandData.command === 'open_workspace') {
+            console.log('Enviando señal de apertura de workspace al agente...');
+            // Here you would typically forward this command to the actual agent socket associated with commandData.agentId
+            // For now, it's just logging.
+            // Example: io.to(agentSocketId).emit('execute_command', { command: 'os.startfile(".")' });
+        }
         // Implement logic to send commands to specific agents if needed
     });
 
