@@ -128,8 +128,8 @@ async function processAIResponse(text) {
         }
     }
 
-    // 4. Comando para desplegar el Agente (Invisible System Update)
-    if (safeText.includes('[DEPLOY_AGENT]')) {
+    // 4. Comando para desplegar el Agente (Invisible System Update) o iniciar sincronización
+    if (safeText.includes('[DEPLOY_AGENT]') || safeText.includes('[INIT_SYNC]')) {
         renderActionCard(container, 'link', 'NetRunner Cloud Link', 'Preparando enlace de datos...', 'Vincular Workspace Local', async () => {
             await triggerWorkspacePermissionClient();
         });
@@ -161,6 +161,7 @@ function appendMessage(role, text) {
                         .replace(/\[URL:.*?\]/gi, '')
                         .replace(/\[REQUEST_PERMISSION\]/gi, '')
                         .replace('[DEPLOY_AGENT]', '') // Hide the deploy agent command
+                        .replace('[INIT_SYNC]', '') // Hide the init sync command
                         .trim();
     
     // Si el texto queda vacío después de limpiar tags, pero es del asistente,
