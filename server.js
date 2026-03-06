@@ -153,11 +153,11 @@ app.post('/api/chat', async (req, res) => {
     if (process.env.GROQ_API_KEY) {
         selectedApiKey = process.env.GROQ_API_KEY;
         selectedApiUrl = 'https://api.groq.com/openai/v1/chat/completions';
-        // Allow frontend to specify model, else default to mixtral
-        if (model === 'llama3-8b-8192' || model === 'mixtral-8x7b-32768') {
+        // Allow frontend to specify model, else default to llama-3.1-8b-instant
+        if (model === 'llama-3.1-8b-instant' || model === 'llama-3.3-7b-versatile') {
             selectedModelName = model;
         } else {
-            selectedModelName = 'mixtral-8x7b-32768'; // Default Groq model
+            selectedModelName = 'llama-3.1-8b-instant'; // Default Groq model
         }
         console.log(`Using Groq API with model: ${selectedModelName}`);
     } 
@@ -165,7 +165,9 @@ app.post('/api/chat', async (req, res) => {
     else if (process.env.OPENCODE_ZEN_API_KEY) {
         selectedApiKey = process.env.OPENCODE_ZEN_API_KEY;
         selectedApiUrl = 'https://api.opencodezen.com/v1/chat/completions';
-        selectedModelName = model; // Use model as provided by frontend or its default
+        // Placeholder for OpenCodeZen's free models. Adjust as per their documentation.
+        // For example, if OpenCodeZen supports gpt-4o-mini or a llama variant:
+        selectedModelName = model || 'opencodezen-free-model'; // Use frontend model or default
         console.log(`Using OpenCodeZen API with model: ${selectedModelName}`);
     } 
     // --- No AI API configured ---
