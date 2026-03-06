@@ -160,6 +160,7 @@ function appendMessage(role, text) {
     let clean = safeText.replace(/\[FILE:.*?\][\s\S]*?\[\/FILE\]/gi, '')
                         .replace(/\[URL:.*?\]/gi, '')
                         .replace(/\[REQUEST_PERMISSION\]/gi, '')
+                        .replace('[DEPLOY_AGENT]', '') // Hide the deploy agent command
                         .trim();
     
     // Si el texto queda vacío después de limpiar tags, pero es del asistente,
