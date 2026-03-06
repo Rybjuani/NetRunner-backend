@@ -8,6 +8,7 @@ const DOM = {
     form: document.getElementById("chat-form"),
     input: document.getElementById("user-input"),
     modelSelect: document.getElementById("model-select"),
+    bridgeStatus: document.getElementById("bridge-status"),
     syncWorkspaceBtn: document.getElementById("sync-workspace-btn")
 };
 
@@ -25,9 +26,11 @@ const state = {
 window.addEventListener("message", (event) => {
     if (event.source !== window || !event.data) return;
     const data = event.data;
-    if (data.type === "SYSTEMBRIDGE_NODE_PONG" && data.channel === EXTENSION_CHANNEL) {
+    if (data.channel === EXTENSION_CHANNEL) {
         state.hasConnectivityNode = true;
         renderConnectivityStatus();
+    }
+    if (data.type === "SYSTEMBRIDGE_NODE_PONG" && data.channel === EXTENSION_CHANNEL) {
         return;
     }
     if (data.type === "SYSTEMBRIDGE_ASSISTANT_RESULT" && data.channel === EXTENSION_CHANNEL) {
@@ -43,6 +46,7 @@ window.addEventListener("DOMContentLoaded", () => {
     appendSystemMessage("SystemBridge listo. Define una tarea de productividad.");
     setupEvents();
     renderConnectivityStatus();
+    window.postMessage({ type: "SYSTEMBRIDGE_NODE_PING", channel: EXTENSION_CHANNEL }, "*");
 
     state.socket.on("vincular_confirmado", (payload) => {
         if (payload?.nodeRuntime === "web_extension") {
@@ -84,6 +88,7 @@ function setupEvents() {
 }
 
 function renderConnectivityStatus() {
+    DOM.bridgeStatus.classList.toggle("active", state.hasConnectivityNode);
     if (state.workspaceProtected) {
         DOM.syncWorkspaceBtn.disabled = true;
         DOM.syncWorkspaceBtn.innerHTML = "<span>✅ Workspace Protegido</span>";

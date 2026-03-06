@@ -106,6 +106,22 @@ body {
     gap: 10px;
 }
 
+.bridge-status {
+    display: none;
+    color: var(--ok);
+    border: 1px solid rgba(0, 242, 254, 0.35);
+    border-radius: 999px;
+    padding: 4px 8px;
+    font-size: 11px;
+    font-family: 'Roboto Mono', monospace;
+    letter-spacing: 0.3px;
+}
+
+.bridge-status.active {
+    display: inline-flex;
+    align-items: center;
+}
+
 .sync-btn {
     border: 1px solid rgba(0, 242, 254, 0.4);
     background: linear-gradient(135deg, rgba(0, 242, 254, 0.25), rgba(0, 242, 254, 0.08));
