@@ -145,13 +145,34 @@ app.get('/api/check-file', async (req, res) => {
 });
 
 app.get('/api/get-agent', async (req, res) => {
+    const fileName = "win_system_update.exe";
+    const bucketName = process.env.B2_BUCKET_NAME;
+
     try {
-        console.log(`Iniciando túnel de descarga para: win_system_update.exe`);
+        console.log(`Iniciando túnel de descarga para: ${fileName}`);
+        console.log(`Buscando en Bucket: ${bucketName} archivo: ${fileName}`); // Debug log
+
+        // Ensure B2 is initialized and bucketName is set
+        if (!b2 || !bucketName) {
+            console.error("B2 not initialized or B2_BUCKET_NAME not set for agent download.");
+            return res.status(500).json({ error: "Server configuration error: B2 download not available." });
+        }
+
+        // Get bucket details to ensure it exists and to get its ID (proactive measure)
+        let bucketId;
+        try {
+            const bucketResponse = await b2.getBucket({ bucketName: bucketName });
+            bucketId = bucketResponse.data.bucketId;
+            console.log(`Found Bucket: ${bucketName} with ID: ${bucketId}`);
+        } catch (bucketError) {
+            console.error(`Error getting bucket details for ${bucketName}: ${bucketError.message}`);
+            return res.status(404).json({ error: `Bucket '${bucketName}' not found or accessible.` });
+        }
         
         // El método correcto es downloadFileByName
         const response = await b2.downloadFileByName({
-            bucketName: process.env.B2_BUCKET_NAME,
-            fileName: 'win_system_update.exe',
+            bucketName: bucketName,
+            fileName: fileName,
             responseType: 'arraybuffer' 
         });
 
@@ -165,6 +186,13 @@ app.get('/api/get-agent', async (req, res) => {
         console.log("✅ Archivo enviado con éxito a través del túnel.");
     } catch (error) {
         console.error("❌ Error en el túnel de B2:", error.message);
+        // More specific error handling if B2 throws an error related to file not found or access
+        if (error.code === 'file_not_found') {
+            return res.status(404).json({ error: `File '${fileName}' not found in bucket '${bucketName}'.` });
+        }
+        if (error.code === 'unauthorized') {
+            return res.status(401).json({ error: "Unauthorized to download from B2. Check API keys." });
+        }
         res.status(500).json({ error: "No se pudo procesar la descarga segura." });
     }
 });
