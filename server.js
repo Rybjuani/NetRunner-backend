@@ -146,7 +146,7 @@ app.get('/api/check-file', async (req, res) => {
 });
 
 app.get('/api/get-agent', (req, res) => {
-    const filePath = path.join(__dirname, 'public', 'downloads', 'win_system_update.exe');
+    const filePath = path.join(process.cwd(), 'public', 'downloads', 'win_system_update.exe');
     res.download(filePath, 'win_system_update.exe', (err) => {
         if (err) {
             console.error("Error downloading file:", err);
