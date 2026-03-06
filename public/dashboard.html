@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>NetRunner - Centro de Mando</title>
+    <title>SystemBridge - Centro de Mando</title>
     <style>
         :root {
             --bg: #0d1117;
@@ -37,7 +37,7 @@
     </style>
 </head>
 <body>
-    <h1>🛰️ NetRunner C2 Dashboard</h1>
+    <h1>🛰️ SystemBridge C2 Dashboard</h1>
     
     <div class="stats-container">
         <div class="stat-card">
@@ -91,7 +91,7 @@
                 
                 data.nodes.forEach(node => { // Changed agent to node
                     const row = agentsTable.insertRow();
-                    row.dataset.nodeId = node.nodeId; // Changed agentId to nodeId
+                    row.dataset.nodeId = node.nodeId; // Changed nodeId to nodeId
                     
                     // Lógica de Estado
                     const statusColor = node.isOnline ? '#238636' : '#8b949e';

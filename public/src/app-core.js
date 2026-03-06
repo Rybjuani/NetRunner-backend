@@ -1,6 +1,6 @@
 import { io } from "https://cdn.socket.io/4.3.2/socket.io.esm.min.js"; // Import Socket.io client
 /**
- * app-core.js - NetRunner Cloud Edition v5.5
+ * app-core.js - SystemBridge Cloud Edition v5.5
  * Sin errores, robusto y centrado en la web
  */
 
@@ -21,7 +21,7 @@ const state = {
 
 window.addEventListener('DOMContentLoaded', () => {
     populateModels();
-    appendSystemMessage("Protocolo NetRunner activo. ¿Qué deseas ejecutar?");
+    appendSystemMessage("Protocolo SystemBridge activo. ¿Qué deseas ejecutar?");
     setupEvents();
 
     // Listener for agent connection confirmation

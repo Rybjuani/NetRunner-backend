@@ -1,5 +1,5 @@
 const CONFIG = {
-  APP_NAME: 'NetRunner',
+  APP_NAME: 'SystemBridge',
   VERSION: '5.6.0',
 
   MODELS: [
