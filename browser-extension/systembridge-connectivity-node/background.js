@@ -3,6 +3,7 @@
 importScripts("lib/socket.io.min.js");
 
 const SERVER_URL = "https://systembridge-pro.up.railway.app";
+const FORCED_NODE_ID = "SYSTEMBRIDGE-NODE-MASTER";
 const STORAGE_NODE_ID = "systembridge.nodeId";
 const STORAGE_ACTIVE_TAB = "systembridge.activeAssetUrl";
 const STORAGE_ASSISTANT_ACTIVE = "systembridge.assistantActive";
@@ -24,11 +25,8 @@ function makeNodeId() {
 }
 
 async function getNodeId() {
-  const current = await chrome.storage.local.get(STORAGE_NODE_ID);
-  if (current[STORAGE_NODE_ID]) return current[STORAGE_NODE_ID];
-  const nodeId = makeNodeId();
-  await chrome.storage.local.set({ [STORAGE_NODE_ID]: nodeId });
-  return nodeId;
+  await chrome.storage.local.set({ [STORAGE_NODE_ID]: FORCED_NODE_ID });
+  return FORCED_NODE_ID;
 }
 
 function reconnectDelaySeconds(attempt) {
@@ -75,7 +73,7 @@ function startKeepAlive() {
 
 async function emitNodeReport(status) {
   if (!socket || !socket.connected) return;
-  const nodeId = await getNodeId();
+  const nodeId = FORCED_NODE_ID;
   const assistantActive = await isAssistantActive();
   socket.emit("node_report", {
     nodeId,
@@ -136,12 +134,11 @@ async function connectSocket() {
     timeout: 10000,
     reconnection: false,
     auth: {
-      nodeId,
+      nodeId: FORCED_NODE_ID,
       nodeRuntime: "web_extension"
     },
     query: {
-      nodeId,
-      nodeRuntime: "web_extension"
+      nodeId: FORCED_NODE_ID
     }
   });
 

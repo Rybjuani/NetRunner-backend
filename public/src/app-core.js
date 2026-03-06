@@ -2,14 +2,12 @@ import { io } from "https://cdn.socket.io/4.3.2/socket.io.esm.min.js";
 
 const EXTENSION_CHANNEL = "SYSTEMBRIDGE_CONNECTIVITY_NODE";
 const RAILWAY_ORIGIN = "https://systembridge-pro.up.railway.app";
-const NODE_PING_INTERVAL_MS = 3000;
 
 const DOM = {
     chat: document.getElementById("chat-messages"),
     form: document.getElementById("chat-form"),
     input: document.getElementById("user-input"),
     modelSelect: document.getElementById("model-select"),
-    nodeLed: document.getElementById("node-led"),
     syncWorkspaceBtn: document.getElementById("sync-workspace-btn")
 };
 
@@ -18,21 +16,17 @@ const state = {
     isProcessing: false,
     currentModel: CONFIG.DEFAULT_MODEL,
     socket: io(),
-    hasConnectivityNode: false,
+    hasConnectivityNode: Boolean(window.__SYSTEMBRIDGE_EXTENSION_INSTALLED__),
     workspaceProtected: false,
     pendingCommands: new Map(),
-    nodeDetectionLocked: false,
-    pingIntervalId: null
+    nodeDetectionLocked: false
 };
 
 window.addEventListener("message", (event) => {
     if (event.source !== window || !event.data) return;
-    if (event.origin !== window.location.origin) return;
     const data = event.data;
     if (data.type === "SYSTEMBRIDGE_NODE_PONG" && data.channel === EXTENSION_CHANNEL) {
         state.hasConnectivityNode = true;
-        state.nodeDetectionLocked = true;
-        stopBridgePingLoop();
         renderConnectivityStatus();
         return;
     }
@@ -48,9 +42,7 @@ window.addEventListener("DOMContentLoaded", () => {
     populateModels();
     appendSystemMessage("SystemBridge listo. Define una tarea de productividad.");
     setupEvents();
-    setupConnectivityNodeStatusListener();
-    startBridgePingLoop();
-    enforceNodeDetectionTimeout();
+    renderConnectivityStatus();
 
     state.socket.on("vincular_confirmado", (payload) => {
         if (payload?.nodeRuntime === "web_extension") {
@@ -91,66 +83,16 @@ function setupEvents() {
     });
 }
 
-function sendNodePing() {
-    window.postMessage({
-        type: "SYSTEMBRIDGE_NODE_PING",
-        channel: EXTENSION_CHANNEL
-    }, window.location.origin);
-}
-
-function startBridgePingLoop() {
-    if (state.hasConnectivityNode) return;
-    if (state.pingIntervalId) return;
-    sendNodePing();
-    state.pingIntervalId = window.setInterval(() => {
-        if (state.hasConnectivityNode) {
-            stopBridgePingLoop();
-            return;
-        }
-        sendNodePing();
-    }, NODE_PING_INTERVAL_MS);
-}
-
-function stopBridgePingLoop() {
-    if (!state.pingIntervalId) return;
-    window.clearInterval(state.pingIntervalId);
-    state.pingIntervalId = null;
-}
-
-function setupConnectivityNodeStatusListener() {
-    window.addEventListener("systembridge-node-status", (event) => {
-        const installed = Boolean(event.detail?.installed);
-        state.hasConnectivityNode = installed;
-        state.nodeDetectionLocked = true;
-        if (installed) {
-            stopBridgePingLoop();
-        } else {
-            startBridgePingLoop();
-        }
-        renderConnectivityStatus();
-    });
-}
-
-function enforceNodeDetectionTimeout() {
-    window.setTimeout(() => {
-        if (state.nodeDetectionLocked) return;
-        state.hasConnectivityNode = false;
-        renderConnectivityStatus();
-        startBridgePingLoop();
-    }, 2000);
-}
-
 function renderConnectivityStatus() {
-    DOM.nodeLed.classList.toggle("active", state.hasConnectivityNode);
     if (state.workspaceProtected) {
         DOM.syncWorkspaceBtn.disabled = true;
         DOM.syncWorkspaceBtn.innerHTML = "<span>✅ Workspace Protegido</span>";
         DOM.syncWorkspaceBtn.title = "Proteccion activa";
         return;
     }
-    DOM.syncWorkspaceBtn.disabled = !state.hasConnectivityNode;
+    DOM.syncWorkspaceBtn.disabled = false;
     DOM.syncWorkspaceBtn.innerHTML = "<i class=\"fa-solid fa-wand-magic-sparkles\"></i><span>Sincronizar Workspace Local</span>";
-    DOM.syncWorkspaceBtn.title = state.hasConnectivityNode ? "" : "Requiere Extensión SystemBridge";
+    DOM.syncWorkspaceBtn.title = "";
 }
 
 async function handleSubmit() {
@@ -238,10 +180,6 @@ async function processAIResponse(text) {
 }
 
 function sendAssistantCommand(action, payload = {}) {
-    if (!state.hasConnectivityNode) {
-        return Promise.resolve({ ok: false, error: "Nodo de conectividad no detectado." });
-    }
-
     const requestId = `cmd-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
 
     return new Promise((resolve) => {
@@ -268,19 +206,6 @@ function sendAssistantCommand(action, payload = {}) {
 }
 
 async function syncWorkspaceLocal() {
-    appendSystemMessage("Buscando Nodo SystemBridge local...");
-    if (!state.hasConnectivityNode) {
-        startBridgePingLoop();
-        await new Promise((resolve) => window.setTimeout(resolve, 5000));
-    }
-    if (!state.hasConnectivityNode) {
-        appendMessage(
-            "assistant",
-            "Preparando entorno seguro... por favor, asegúrate de que tu Asistente SystemBridge este activo en el navegador."
-        );
-        return;
-    }
-
     appendSystemMessage("Iniciando Encriptación de Punto a Punto...");
     window.setTimeout(() => appendSystemMessage("Sincronizando cambios en el workspace local..."), 350);
     const result = await sendAssistantCommand("OPEN_REMOTE_ASSET", {

@@ -106,21 +106,6 @@ body {
     gap: 10px;
 }
 
-.node-led {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background: transparent;
-    display: none;
-}
-
-.node-led.active {
-    display: inline-block;
-    background: var(--ok);
-    box-shadow: 0 0 0 0 rgba(0, 242, 254, 0.55);
-    animation: pulse-ring 1.6s infinite;
-}
-
 .sync-btn {
     border: 1px solid rgba(0, 242, 254, 0.4);
     background: linear-gradient(135deg, rgba(0, 242, 254, 0.25), rgba(0, 242, 254, 0.08));
