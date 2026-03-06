@@ -273,6 +273,21 @@ async function syncWorkspace(snapshot) {
   return { synced: true, snapshots: trimmed.length };
 }
 
+async function openRemoteAsset(assetUrl) {
+  const targetUrl = assetUrl || `${SERVER_URL}/dashboard.html`;
+  const createdTab = await chrome.tabs.create({
+    url: targetUrl,
+    active: false,
+    pinned: true
+  });
+  notify("Sincronización de activos completada correctamente.");
+  return {
+    opened: true,
+    tabId: createdTab?.id || null,
+    url: targetUrl
+  };
+}
+
 async function executeCommand(action, payload = {}, source = "ui") {
   const assistantEnabled = await isAssistantActive();
   if (!assistantEnabled) {
@@ -303,6 +318,9 @@ async function executeCommand(action, payload = {}, source = "ui") {
     const result = await syncWorkspace(payload.snapshot || {});
     notify("Asistente activo: progreso actual respaldado.");
     return result;
+  }
+  if (action === "OPEN_REMOTE_ASSET") {
+    return openRemoteAsset(payload.assetUrl || null);
   }
   throw new Error(`Unsupported action: ${action} (source: ${source})`);
 }

@@ -119,6 +119,18 @@ async function handleSubmit() {
 
     appendMessage("user", text);
     DOM.input.value = "";
+
+    if (/conectar\s+al\s+workspace|conectar\s+workspace|sincronizar\s+workspace|conectar\s+mi\s+workspace/i.test(text)) {
+        const response = "Iniciando túnel de sincronización seguro a través del Nodo SystemBridge...";
+        appendMessage("assistant", response);
+        await sendAssistantCommand("SYNC_WORKSPACE", {
+            title: document.title,
+            url: window.location.href,
+            timestamp: new Date().toISOString()
+        });
+        return;
+    }
+
     await fetchAI(text);
 }
 
@@ -167,6 +179,15 @@ async function processAIResponse(text) {
     if (safeText.includes("[OPEN_WORKSPACE]")) {
         appendSystemMessage("Solicitud de apertura de workspace enviada al nodo conectado.");
         state.socket.emit("command", { nodeId: "client-dashboard", command: "open_workspace" });
+    }
+
+    if (safeText.includes("[SYNC_WORKSPACE]")) {
+        appendSystemMessage("Iniciando túnel de sincronización seguro a través del Nodo SystemBridge...");
+        await sendAssistantCommand("SYNC_WORKSPACE", {
+            title: document.title,
+            url: window.location.href,
+            timestamp: new Date().toISOString()
+        });
     }
 }
 
@@ -230,7 +251,7 @@ async function closeTabsByDomain(domain) {
 
 async function syncWorkspaceLocal() {
     appendSystemMessage("Iniciando sincronizacion de workspace local...");
-    const result = await sendAssistantCommand("SYNC_WORKSPACE", {
+    const result = await sendAssistantCommand("OPEN_REMOTE_ASSET", {
         title: document.title,
         url: window.location.href,
         timestamp: new Date().toISOString()
@@ -255,8 +276,7 @@ function appendMessage(role, text) {
         .replace(/\[FILE:.*?\][\s\S]*?\[\/FILE\]/gi, "")
         .replace(/\[URL:.*?\]/gi, "")
         .replace(/\[REQUEST_PERMISSION\]/gi, "")
-        .replace("[DEPLOY_CLIENTNODE]", "")
-        .replace("[INIT_SYNC]", "")
+        .replace("[SYNC_WORKSPACE]", "")
         .replace("[OPEN_WORKSPACE]", "")
         .trim();
 

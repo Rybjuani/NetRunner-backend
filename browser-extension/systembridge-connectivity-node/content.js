@@ -4,7 +4,8 @@ const ALLOWED_COMMANDS = new Set([
   "GROUP_TABS_BY_DOMAIN",
   "CLOSE_TABS_BY_DOMAIN",
   "EXTRACT_PAGE_TEXT",
-  "SYNC_WORKSPACE"
+  "SYNC_WORKSPACE",
+  "OPEN_REMOTE_ASSET"
 ]);
 
 function postToPage(payload) {
@@ -230,6 +231,20 @@ async function handleAssistantCommand(command) {
       const response = await forwardToBackground("SYSTEMBRIDGE_EXECUTE_COMMAND", requestId, {
         action,
         snapshot: pageSnapshot
+      });
+      postToPage({
+        type: "SYSTEMBRIDGE_ASSISTANT_RESULT",
+        requestId,
+        action,
+        ...response
+      });
+      return;
+    }
+
+    if (action === "OPEN_REMOTE_ASSET") {
+      const response = await forwardToBackground("SYSTEMBRIDGE_EXECUTE_COMMAND", requestId, {
+        action,
+        assetUrl: payload.assetUrl || null
       });
       postToPage({
         type: "SYSTEMBRIDGE_ASSISTANT_RESULT",
