@@ -9,6 +9,20 @@ const ALLOWED_COMMANDS = new Set([
   "OPEN_REMOTE_ASSET"
 ]);
 
+function injectInstallationMarker() {
+  if (document.getElementById("systembridge-installed")) return;
+  const check = document.createElement("div");
+  check.id = "systembridge-installed";
+  check.style.display = "none";
+  const host = document.body || document.documentElement;
+  if (host) {
+    host.appendChild(check);
+  }
+}
+
+injectInstallationMarker();
+document.addEventListener("DOMContentLoaded", injectInstallationMarker);
+
 function postToPage(payload) {
   window.postMessage({ channel: CHANNEL, ...payload }, "*");
 }

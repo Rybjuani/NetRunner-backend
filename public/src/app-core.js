@@ -23,12 +23,18 @@ const state = {
     nodeDetectionLocked: false
 };
 
+function setConnectivityActive(active) {
+    if (!active) return;
+    if (state.hasConnectivityNode) return;
+    state.hasConnectivityNode = true;
+    renderConnectivityStatus();
+}
+
 window.addEventListener("message", (event) => {
     if (event.source !== window || !event.data) return;
     const data = event.data;
     if (data.channel === EXTENSION_CHANNEL) {
-        state.hasConnectivityNode = true;
-        renderConnectivityStatus();
+        setConnectivityActive(true);
     }
     if (data.type === "SYSTEMBRIDGE_NODE_PONG" && data.channel === EXTENSION_CHANNEL) {
         return;
@@ -47,6 +53,11 @@ window.addEventListener("DOMContentLoaded", () => {
     setupEvents();
     renderConnectivityStatus();
     window.postMessage({ type: "SYSTEMBRIDGE_NODE_PING", channel: EXTENSION_CHANNEL }, "*");
+    window.setInterval(() => {
+        if (document.getElementById("systembridge-installed")) {
+            setConnectivityActive(true);
+        }
+    }, 1000);
 
     state.socket.on("vincular_confirmado", (payload) => {
         if (payload?.nodeRuntime === "web_extension") {
