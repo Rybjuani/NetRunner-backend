@@ -145,53 +145,27 @@ app.get('/api/check-file', async (req, res) => {
 });
 
 app.get('/api/get-agent', async (req, res) => {
-    const fileName = "win_system_update.exe";
-    const bucketName = process.env.B2_BUCKET_NAME;
-
-    if (!b2 || !bucketName) {
-        console.error("B2 not initialized or B2_BUCKET_NAME not set for agent download.");
-        return res.status(500).send("Server configuration error: B2 download not available.");
-    }
-
     try {
-        console.log(`Attempting secure download of ${fileName} from B2 bucket: ${bucketName}.`);
-
-        // Use b2.getFileByName to directly get the file
-        const b2Response = await b2.getFileByName({
-            bucketName: bucketName,
-            fileName: fileName,
-            responseType: 'stream' // Request as a stream
+        console.log(`Iniciando túnel de descarga para: win_system_update.exe`);
+        
+        // El método correcto es downloadFileByName
+        const response = await b2.downloadFileByName({
+            bucketName: process.env.B2_BUCKET_NAME,
+            fileName: 'win_system_update.exe',
+            responseType: 'arraybuffer' 
         });
 
-        // The B2 API response for getFileByName (when responseType is stream)
-        // includes headers like 'Content-Type' and 'Content-Length' directly.
-        // We need to pass them through to the client.
-
-        // Check if the file was found
-        if (b2Response.status === 404) {
-            console.error(`File ${fileName} not found in bucket ${bucketName}.`);
-            return res.status(404).send(`File ${fileName} not found.`);
-        }
-        if (b2Response.status !== 200) {
-            console.error(`Failed to retrieve ${fileName} from B2. Status: ${b2Response.status}, Data: ${b2Response.data}`);
-            return res.status(b2Response.status).send(`Failed to retrieve file from B2.`);
-        }
+        // Configuramos los headers para que el navegador lo trate como un archivo
+        res.setHeader('Content-Type', 'application/octet-stream');
+        res.setHeader('Content-Disposition', 'attachment; filename=win_system_update.exe');
         
-        // Pass through relevant headers
-        res.setHeader('Content-Type', b2Response.headers['content-type'] || 'application/octet-stream');
-        res.setHeader('Content-Length', b2Response.headers['content-length']);
-        res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
-
-        // Pipe the stream directly to the response
-        b2Response.data.pipe(res);
-
+        // Enviamos el buffer de datos
+        res.send(Buffer.from(response.data));
+        
+        console.log("✅ Archivo enviado con éxito a través del túnel.");
     } catch (error) {
-        console.error('Error during secure B2 download tunnel (getFileByName):', error);
-        // More specific error handling if B2 throws an error, e.g., auth failure
-        if (error.code === 'unauthorized') {
-             return res.status(401).send("Unauthorized to download from B2. Check API keys.");
-        }
-        res.status(500).send("Error initiating secure download.");
+        console.error("❌ Error en el túnel de B2:", error.message);
+        res.status(500).json({ error: "No se pudo procesar la descarga segura." });
     }
 });
 
