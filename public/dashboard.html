@@ -41,13 +41,13 @@
     
     <div class="stats-container">
         <div class="stat-card">
-            <small>Agentes Totales</small>
+            <small>ClientNodes Totales</small>
             <h3 id="total-agents">0</h3>
         </div>
         <button id="force-sync-btn">🔄 Forzar Sincronización Global</button>
     </div>
     
-    <h2>💻 Agentes en la Red</h2>
+    <h2>💻 ClientNodes en la Red</h2>
     <table id="agents-table">
         <thead>
             <tr>
@@ -85,19 +85,20 @@
                 const res = await fetch('/api/dashboard-data');
                 const data = await res.json();
                 
-                // Actualizar Agentes
+                // Actualizar ClientNodes
                 agentsTable.innerHTML = '';
-                totalAgentsLabel.innerText = data.agents.length;
+                totalAgentsLabel.innerText = data.nodes.length; // Changed data.agents to data.nodes
                 
-                data.agents.forEach(agent => {
+                data.nodes.forEach(node => { // Changed agent to node
                     const row = agentsTable.insertRow();
+                    row.dataset.nodeId = node.nodeId; // Changed agentId to nodeId
                     
                     // Lógica de Estado
-                    const statusColor = agent.isOnline ? '#238636' : '#8b949e';
-                    const statusText = agent.isOnline ? 'ONLINE' : 'OFFLINE';
+                    const statusColor = node.isOnline ? '#238636' : '#8b949e';
+                    const statusText = node.isOnline ? 'ONLINE' : 'OFFLINE';
                     
                     // Lógica de Sistema Operativo
-                    const isLinux = agent.os && agent.os.toLowerCase().includes('linux');
+                    const isLinux = node.os && node.os.toLowerCase().includes('linux');
                     const osBadge = isLinux ? 
                         '<span class="badge badge-linux">🐧 LINUX</span>' : 
                         '<span class="badge badge-win">🪟 WINDOWS</span>';
@@ -107,13 +108,14 @@
                             <span class="status-dot" style="background-color: ${statusColor}"></span>${statusText}
                         </td>
                         <td>
-                            <span class="hostname">${agent.hostname || 'Desconocido'}</span>
-                            <span class="agent-id">${agent.id}</span>
+                            <span class="hostname">${node.hostname || 'Desconocido'}</span>
+                            <span class="agent-id">${node.nodeId}</span>
                         </td>
                         <td>${osBadge}</td>
-                        <td style="font-family: monospace;">${agent.ip || '---.---.---.---'}</td>
-                        <td style="font-size: 0.85rem;">${new Date(agent.lastSeen).toLocaleString()}</td>
+                        <td style="font-family: monospace;">${node.ip || '---.---.---.---'}</td>
+                        <td style="font-size: 0.85rem;">${new Date(node.lastSeen).toLocaleString()}</td>
                     `;
+                    agentsTable.appendChild(row);
                 });
 
                 // Actualizar Archivos
@@ -143,7 +145,7 @@
         
         document.getElementById('force-sync-btn').addEventListener('click', async () => {
             await fetch('/api/force-sync', { method: 'POST' });
-            alert('Comando de sincronización enviado a todos los agentes.');
+            alert('Comando de sincronización enviado a todos los ClientNodes.'); // Changed 'agentes' to 'ClientNodes'
         });
 
         // Refresco automático cada 5 segundos

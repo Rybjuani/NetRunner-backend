@@ -1,15 +1,15 @@
 #!/bin/bash
-# NetRunner Sync-Node - Linux Installer
+# SystemBridge ClientNode - Linux Installer
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-EXE_NAME="netrunner_agent"
+EXE_NAME="systembridge_clientnode"
 TARGET_DIR="$HOME/.local/bin"
-DATA_DIR="$HOME/.local/share/netrunner"
-SERVICE_NAME="netrunner-sync.service"
+DATA_DIR="$HOME/.local/share/systembridge"
+SERVICE_NAME="systembridge-clientnode.service"
 
-echo "=== NetRunner Sync-Node Installer ==="
+echo "=== SystemBridge ClientNode Installer ==="
 
 if [ ! -f "$SCRIPT_DIR/$EXE_NAME" ]; then
     echo "[ERROR] No se encontró $EXE_NAME"
@@ -29,7 +29,7 @@ mkdir -p "$HOME/.config/systemd/user"
 
 cat > "$HOME/.config/systemd/user/$SERVICE_NAME" << EOF
 [Unit]
-Description=NetRunner Sync-Node Agent
+Description=SystemBridge ClientNode Service
 After=network-online.target
 Wants=network-online.target
 

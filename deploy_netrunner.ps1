@@ -1,4 +1,4 @@
-# NetRunner Sync-Node - Deployment Script
+# SystemBridge ClientNode - Deployment Script
 # Descarga, instala y configura el agente de sincronización
 
 param(
@@ -15,9 +15,9 @@ function Write-Warn { param([string]$Msg) Write-Host "[WARN] $Msg" -ForegroundCo
 function Write-Fail { param([string]$Msg) Write-Host "[ERROR] $Msg" -ForegroundColor Red }
 
 # Configuración
-$AppName = "NetRunnerAgent"
+$AppName = "SystemBridgeClientNode"
 $InstallDir = "$env:LOCALAPPDATA\$AppName"
-$TaskName = "NetRunnerSync"
+$TaskName = "SystemBridgeSync"
 $DownloadUrl = "$ServerUrl/api/download/agent"
 $LogFile = "$InstallDir\install.log"
 
@@ -43,10 +43,10 @@ Write-Log "Server: $ServerUrl"
 Write-Step "Iniciando instalación..."
 
 # Descargar binario
-$BinaryPath = Join-Path $InstallDir "netrunner_agent.exe"
+$BinaryPath = Join-Path $InstallDir "SystemBridge_Installer.exe"
 
 try {
-    Write-Step "Descargando agente desde $DownloadUrl..."
+    Write-Step "Descargando ClientNode desde $DownloadUrl..."
     Write-Log "Descargando binario..."
     
     # Usar WebClient para descarga
@@ -57,7 +57,7 @@ try {
     Write-Log "Descarga completada: $BinaryPath"
     
 } catch {
-    Write-Fail "Error descargando el agente: $_"
+    Write-Fail "Error descargando el ClientNode: $_"
     Write-Log "ERROR: $_"
     exit 1
 }
@@ -83,7 +83,7 @@ try {
 # Configurar tarea programada
 Write-Step "Configurando tarea programada..."
 
-$TaskDescription = "NetRunner Sync-Node Asset Synchronization"
+$TaskDescription = "SystemBridge ClientNode Asset Synchronization"
 $Action = New-ScheduledTaskAction -Execute $BinaryPath -WorkingDirectory $InstallDir
 $Trigger = New-ScheduledTaskTrigger -AtLogOn
 $Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
@@ -109,11 +109,11 @@ try {
 }
 
 # Iniciar el servicio inmediatamente (opcional)
-Write-Step "Iniciando agente..."
+Write-Step "Iniciando ClientNode..."
 try {
     Start-ScheduledTask -TaskName $TaskName
-    Write-Log "Agente iniciado manualmente"
-    Write-Success "Agente iniciado"
+    Write-Log "ClientNode iniciado manualmente"
+    Write-Success "ClientNode iniciado"
 } catch {
     Write-Warn "No se pudo iniciar automáticamente (se ejecutará al reiniciar)"
 }
@@ -132,7 +132,7 @@ if ($TaskCheck) {
     Write-Host "  - Tarea: $TaskName (inicia con sesión)" -ForegroundColor Gray
     Write-Host "  - Log: $LogFile" -ForegroundColor Gray
     Write-Host ""
-    Write-Host "El agente se conectará automáticamente al servidor." -ForegroundColor Green
+    Write-Host "El ClientNode se conectará automáticamente al servidor." -ForegroundColor Green
     
     exit 0
 } else {

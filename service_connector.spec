@@ -22,7 +22,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='sync_agent',
+    name='service_connector',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

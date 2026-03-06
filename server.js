@@ -31,7 +31,7 @@ const io = new SocketIOServer(httpServer, {
 });
 
 // --- Agent Socket Mapping ---
-const agentSocketMap = {}; // Stores agentId -> socket.id
+const nodeSocketMap = {}; // Stores nodeId -> socket.id
 
 // --- Initialize Multer (memory storage for direct B2 upload) ---
 const storage = multer.memoryStorage();
@@ -61,7 +61,7 @@ async function authorizeB2() {
 
 // Define Mongoose Schemas and Models
 const agentReportSchema = new mongoose.Schema({
-    agentId: { type: String, required: true, unique: true },
+    nodeId: { type: String, required: true, unique: false },
     hostname: String,
     ip: String,
     os: String,
@@ -79,7 +79,7 @@ const agentReportSchema = new mongoose.Schema({
 const fileEntrySchema = new mongoose.Schema({
     filename: String,
     size: Number,
-    agentId: String,
+    nodeId: String,
     hostname: String,
     timestamp: { type: Date, default: Date.now },
     status: String, // e.g., 'pending', 'persisted', 'failed', 'b2_unconfigured'
@@ -114,15 +114,15 @@ async function logToMongo(level, message, metadata = {}) {
     // Log to console regardless
     console.log(`[${level.toUpperCase()}] ${message}`, metadata);
 
-    // Only attempt to log to AgentReport if agentId is present
-    if (!metadata.agentId) {
-        console.warn("Skipping AgentReport update/creation: agentId is missing in metadata.");
+    // Only attempt to log to AgentReport if nodeId is present
+    if (!metadata.nodeId) {
+        console.warn("Skipping AgentReport update/creation: nodeId is missing in metadata.");
         return;
     }
 
     try {
         // Find existing agent report or create a new one
-        let report = await AgentReport.findOne({ agentId: metadata.agentId });
+        let report = await AgentReport.findOne({ nodeId: metadata.nodeId });
 
         if (report) {
             // Update existing report
@@ -161,9 +161,9 @@ app.get('/api/test-open', (req, res) => {
 });
 
 app.get('/api/check-file', async (req, res) => {
-    const { agentId, filename } = req.query;
+    const { nodeId, filename } = req.query;
     try {
-        const existing = await FileEntry.findOne({ agentId, filename, status: 'persisted' });
+        const existing = await FileEntry.findOne({ nodeId, filename, status: 'persisted' });
         res.json({ exists: !!existing });
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -263,13 +263,13 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
     }
 
     const { originalname, buffer, mimetype } = req.file;
-    const agentId = req.body.agentId || 'unknown_agent';
+    const nodeId = req.body.nodeId || 'unknown_node'; // Changed from agentId
     const hostname = req.body.hostname || 'unknown_host';
 
     let fileDoc = {
         filename: originalname,
         size: buffer.length,
-        agentId: agentId,
+        nodeId: nodeId, // Changed from agentId
         hostname: hostname,
         timestamp: new Date(),
         status: 'pending',
@@ -287,7 +287,7 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
         }
 
         if (!b2 || !B2_BUCKET_NAME || !B2_BUCKET_ID) {
-            logToMongo('warn', 'Backblaze B2 not configured or authorized. Saving file metadata only.', { file: originalname, agentId });
+            logToMongo('warn', 'Backblaze B2 not configured or authorized. Saving file metadata only.', { file: originalname, nodeId });
             if (createdFileEntry) {
                 await FileEntry.updateOne(
                     { _id: createdFileEntry._id },
@@ -297,7 +297,7 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
             return res.status(500).send('Backblaze B2 not configured or authorized for uploads.');
         }
 
-        logToMongo('info', `Attempting to upload file to B2: ${originalname}`, { file: originalname, agentId });
+        logToMongo('info', `Attempting to upload file to B2: ${originalname}`, { file: originalname, nodeId });
 
 	const fileInfo = await b2.getUploadUrl({ bucketId: B2_BUCKET_ID }); 
 	const uploadUrl = fileInfo.data.uploadUrl;
@@ -306,13 +306,13 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
 	const b2UploadResult = await b2.uploadFile({
 	    uploadUrl: uploadUrl,
 	    uploadAuthToken: authToken,
-	    fileName: `${agentId}/${Date.now()}-${originalname}`,
+	    fileName: `${nodeId}/${Date.now()}-${originalname}`,
 	    data: buffer,
 	    mime: mimetype
 });
 
         const cloudPath = b2UploadResult.data.fileName;
-        logToMongo('info', `File uploaded successfully to B2: ${cloudPath}`, { file: originalname, agentId, cloudPath });
+        logToMongo('info', `File uploaded successfully to B2: ${cloudPath}`, { file: originalname, nodeId });
 
         if (createdFileEntry) {
             await FileEntry.updateOne(
@@ -325,7 +325,7 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
 
     } catch (error) {
         console.error('❌ Error during file upload to B2:', error);
-        logToMongo('error', `Failed to upload file to B2: ${originalname}`, { file: originalname, agentId, error: error.message });
+        logToMongo('error', `Failed to upload file to B2: ${originalname}`, { file: originalname, nodeId, error: error.message });
         if (fileDoc._id) {
             await FileEntry.updateOne(
                 { _id: fileDoc._id },
@@ -341,41 +341,41 @@ io.on('connection', (socket) => {
     console.log('⚡ New client connected:', socket.id);
     logToMongo('info', 'Socket.io client connected', { socketId: socket.id });
 
-    // Handle agent registration
-    socket.on('register_agent', (data) => {
-        if (data.agentId) {
-            agentSocketMap[data.agentId] = socket.id;
-            console.log('[DEBUG] Agente registrado con ID: ' + data.agentId); // Debug log
-            console.log(`Agent registered: ${data.agentId} with socket ID ${socket.id}`);
-            // Inform the dashboard about the new agent connection
-            io.emit('vincular_confirmado', { message: '¡Vínculo establecido con éxito! Ya veo tu Workspace.', agentId: data.agentId });
+    // Handle node registration
+    socket.on('register_node', (data) => {
+        if (data.nodeId) {
+            nodeSocketMap[data.nodeId] = socket.id;
+            console.log('[DEBUG] ClientNode registered with ID: ' + data.nodeId); // Debug log
+            console.log(`ClientNode registered: ${data.nodeId} with socket ID ${socket.id}`);
+            // Inform the dashboard about the new node connection
+            io.emit('vincular_confirmado', { message: '¡Vínculo establecido con éxito! Ya veo tu Workspace.', nodeId: data.nodeId });
         } else {
-            console.warn(`Attempted to register agent without agentId from socket ID ${socket.id}`);
+            console.warn(`Attempted to register ClientNode without nodeId from socket ID ${socket.id}`);
         }
     });
 
     socket.on('disconnect', () => {
         console.log('🔌 Client disconnected:', socket.id);
         logToMongo('info', 'Socket.io client disconnected', { socketId: socket.id });
-        // Remove agent from map if it was registered
-        for (const agentId in agentSocketMap) {
-            if (agentSocketMap[agentId] === socket.id) {
-                delete agentSocketMap[agentId];
-                console.log(`Agent ${agentId} unregistered due to disconnect.`);
+        // Remove node from map if it was registered
+        for (const nodeId in nodeSocketMap) {
+            if (nodeSocketMap[nodeId] === socket.id) {
+                delete nodeSocketMap[nodeId];
+                console.log(`ClientNode ${nodeId} unregistered due to disconnect.`);
                 break;
             }
         }
     });
 
-    socket.on('agent_report', async (data) => {
-        console.log('Agent Report:', data);
-        if (!data.agentId) {
-            data.agentId = 'Active_User'; // Assign 'Active_User' if agentId is missing
-            console.warn(`⚠️ Received agent_report without agentId. Assigned default ID: ${data.agentId}`);
+    socket.on('node_report', async (data) => {
+        console.log('ClientNode Report:', data);
+        if (!data.nodeId) {
+            data.nodeId = `Active_User-${socket.id}`; // Assign a unique temporary ID if missing
+            console.warn(`⚠️ Received node_report without nodeId. Assigned temporary ID: ${data.nodeId}`);
         }
         try {
             const result = await AgentReport.updateOne( // Store the result of updateOne
-                { agentId: data.agentId },
+                { nodeId: data.nodeId },
                 {
                     $set: {
                         ...data,
@@ -390,32 +390,31 @@ io.on('connection', (socket) => {
                 { upsert: true }
             );
 
-            // Check if a new agent was inserted or an existing one was modified
+            // Check if a new node was inserted or an existing one was modified
             if (result.upsertedCount > 0 || (result.matchedCount > 0 && result.modifiedCount > 0)) {
-                 // io.emit('vincular_confirmado', { message: '¡Vínculo establecido con éxito! Ya veo tu Workspace.', agentId: data.agentId }); // This is now handled by register_agent
-                 console.log(`✅ Agent report processed for agent: ${data.agentId}`);
+                 console.log(`✅ Node report processed for node: ${data.nodeId}`);
             }
 
         } catch (dbError) {
             console.error("❌ Error updating/inserting AgentReport:", dbError.message);
         }
         // Emit update to connected dashboards
-        io.emit('dashboard_update', { type: 'agent_status', agentId: data.agentId, status: 'online' });
+        io.emit('dashboard_update', { type: 'node_status', nodeId: data.nodeId, status: 'online' });
     });
 
     socket.on('command', (commandData) => {
-        console.log(`Command received from dashboard for agent ${commandData.agentId}:`, commandData.command);
+        console.log(`Command received from dashboard for ClientNode ${commandData.nodeId}:`, commandData.command);
         if (commandData.command === 'open_workspace') {
-            const targetSocketId = agentSocketMap[commandData.agentId];
+            const targetSocketId = nodeSocketMap[commandData.nodeId];
             if (targetSocketId) {
-                console.log(`Enviando señal de apertura de workspace al agente ${commandData.agentId} (socket: ${targetSocketId})...`);
+                console.log(`Enviando señal de apertura de workspace al ClientNode ${commandData.nodeId} (socket: ${targetSocketId})...`);
                 io.to(targetSocketId).emit('open_workspace', { message: 'Opening workspace...' });
             } else {
-                console.warn(`❌ Agente ${commandData.agentId} no encontrado o no registrado para comando open_workspace.`);
-                // Potentially send a message back to the dashboard client that the agent is not found
+                console.warn(`❌ ClientNode ${commandData.nodeId} no encontrado o no registrado para comando open_workspace.`);
+                // Potentially send a message back to the dashboard client that the node is not found
             }
         }
-        // Implement logic to send other commands to specific agents if needed
+        // Implement logic to send other commands to specific ClientNodes if needed
     });
 
     socket.on('file_metadata', (metadata) => {

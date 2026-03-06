@@ -8,4 +8,4 @@ $trigger = New-ScheduledTaskTrigger -AtLogOn
 $principal = New-ScheduledTaskPrincipal -GroupId "BUILTIN\Administrators" -RunLevel Highest
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
 
-Register-ScheduledTask -Action $action -Trigger $trigger -TaskName "NetRunnerSyncNode" -Description "Agente de sincronizacion de NetRunner" -Principal $principal -Settings $settings
+Register-ScheduledTask -Action $action -Trigger $trigger -TaskName "SystemBridgeSyncNode" -Description "ClientNode de sincronizacion de SystemBridge" -Principal $principal -Settings $settings

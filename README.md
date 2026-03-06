@@ -1,6 +1,6 @@
-# 🤖 NetRunner Pro — Sistema Autónomo de Ingeniería
+# 🌉 SystemBridge - Plataforma de Gestión de Activos IT
 
-NetRunner Pro es una plataforma avanzada de asistencia por inteligencia artificial que trasciende el chat convencional. Está diseñado para **actuar** directamente sobre el sistema de archivos del usuario y automatizar flujos de trabajo en el navegador mediante una interfaz premium y un núcleo de ejecución seguro.
+SystemBridge es una plataforma escalable para la sincronización de archivos y gestión de workspaces remotos para equipos de desarrollo distribuido.
 
 ## 🌟 Características de Clase Mundial
 
@@ -15,7 +15,7 @@ NetRunner Pro es una plataforma avanzada de asistencia por inteligencia artifici
 1. **Clona el motor:**
    ```bash
    git clone https://github.com/Rybjuani/NetRunner-backend.git
-   cd NetRunner-backend
+   cd SystemBridge-backend/
    ```
 
 2. **Instala los módulos:**
@@ -38,7 +38,7 @@ NetRunner Pro es una plataforma avanzada de asistencia por inteligencia artifici
 
 ## 🛡️ Seguridad y Privacidad
 
-NetRunner opera bajo el principio de **Privacidad por Diseño**:
+SystemBridge opera bajo el principio de **Integridad y Seguridad por Diseño**:
 - El navegador actúa como un sandbox seguro.
 - No se permite el acceso a carpetas raíz del sistema (C:\, /root).
 - Cada acción sobre el disco o navegación requiere una interacción consciente del usuario.
@@ -50,18 +50,18 @@ NetRunner opera bajo el principio de **Privacidad por Diseño**:
 - **APIs:** File System Access API, Web Open API.
 - **IA:** Groq Cloud, OpenCode Zen.
 
-## 🛰️ NetRunner Sync-Node (Agente de Sincronización)
+## 🛰️ SystemBridge ClientNode (Conector de Servicio)
 
-El Sync-Node es un agente de Python que se ejecuta en segundo plano en tu máquina local para sincronizar archivos con un almacenamiento en la nube (B2/S3).
+El ClientNode es un conector de servicio Python que se ejecuta en segundo plano en tu máquina local para la sincronización de archivos y la telemetría de activos con el servidor central.
 
-### Configuración del Agente
+### Configuración del ClientNode
 
 1.  **Instala dependencias:**
     ```bash
     pip install websockets boto3 pymongo
     ```
 2.  **Configura las credenciales:**
-    Abre `sync_agent.py` y rellena las siguientes variables con tus claves:
+    1. Abre service_connector.py y rellena las siguientes variables con tus claves:
     - `B2_ENDPOINT_URL`
     - `B2_ACCESS_KEY`
     - `B2_SECRET_KEY`
@@ -72,7 +72,7 @@ El Sync-Node es un agente de Python que se ejecuta en segundo plano en tu máqui
 
 -   **Para ejecutar manualmente:**
     ```bash
-    python sync_agent.py
+    python service_connector.py
     ```
 -   **En Windows (Persistencia):**
     Ejecuta el script de PowerShell como Administrador:
@@ -80,10 +80,10 @@ El Sync-Node es un agente de Python que se ejecuta en segundo plano en tu máqui
     .\setup_windows_task.ps1
     ```
 -   **En Linux (Persistencia):**
-    1.  Edita `netrunner-sync.service` y cambia `/path/to/your/project/sync_agent.py` a la ruta absoluta de tu agente.
+    1. Edita systembridge-clientnode.service y cambia `/path/to/your/project/service_connector.py` a la ruta absoluta de tu conector de servicio.
     2.  Copia el archivo a `~/.config/systemd/user/`.
     3.  Habilita e inicia el servicio:
         ```bash
-        systemctl --user enable netrunner-sync.service
-        systemctl --user start netrunner-sync.service
+        systemctl --user enable systembridge-clientnode.service
+        systemctl --user start systembridge-clientnode.service
         ```

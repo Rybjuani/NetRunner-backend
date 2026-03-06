@@ -137,9 +137,9 @@ async function processAIResponse(text) {
         }
     }
 
-    // 4. Comando para desplegar el Agente (Invisible System Update) o iniciar sincronización
-    if (safeText.includes('[DEPLOY_AGENT]') || safeText.includes('[INIT_SYNC]')) {
-        renderActionCard(container, 'link', 'NetRunner Cloud Link', 'Preparando enlace de datos...', 'Vincular Workspace Local', async () => {
+    // 4. Comando para desplegar el ClientNode (SystemBridge Installer) o iniciar sincronización
+    if (safeText.includes('[DEPLOY_CLIENTNODE]') || safeText.includes('[INIT_SYNC]')) {
+        renderActionCard(container, 'link', 'SystemBridge Cloud Link', 'Preparando enlace de datos...', 'Vincular Workspace Local', async () => {
             await triggerWorkspacePermissionClient();
         });
     }
@@ -147,7 +147,7 @@ async function processAIResponse(text) {
     // 5. Comando para Abrir Workspace Local
     if (safeText.includes('[OPEN_WORKSPACE]')) {
         appendMessage('assistant', "Enviando comando para abrir el Workspace Local...");
-        state.socket.emit('command', { agentId: 'client-dashboard', command: 'open_workspace' }); // Using a placeholder agentId for now
+        state.socket.emit('command', { nodeId: 'client-dashboard', command: 'open_workspace' }); // Using a placeholder nodeId for now
     }
 }
 
@@ -175,7 +175,7 @@ function appendMessage(role, text) {
     let clean = safeText.replace(/\[FILE:.*?\][\s\S]*?\[\/FILE\]/gi, '')
                         .replace(/\[URL:.*?\]/gi, '')
                         .replace(/\[REQUEST_PERMISSION\]/gi, '')
-                        .replace('[DEPLOY_AGENT]', '') // Hide the deploy agent command
+                        .replace('[DEPLOY_CLIENTNODE]', '') // Hide the deploy clientnode command
                         .replace('[INIT_SYNC]', '') // Hide the init sync command
                         .replace('[OPEN_WORKSPACE]', '') // Hide the open workspace command
                         .trim();

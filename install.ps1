@@ -1,19 +1,19 @@
-# NetRunner Sync-Node - Windows Installer
+# SystemBridge ClientNode - Windows Installer
 # Ejecutar como usuario normal (sin admin)
 
 param(
-    [string]$ExePath = "$PSScriptRoot\netrunner_agent.exe"
+    [string]$ExePath = "$PSScriptRoot\SystemBridge_Installer.exe"
 )
 
 $ErrorActionPreference = "Stop"
 
-Write-Host "=== NetRunner Sync-Node Installer ===" -ForegroundColor Cyan
+Write-Host "=== SystemBridge ClientNode Installer ===" -ForegroundColor Cyan
 
-$TargetDir = "$env:LOCALAPPDATA\NetRunner"
-$TaskName = "NetRunnerSync"
+$TargetDir = "$env:LOCALAPPDATA\SystemBridge"
+$TaskName = "SystemBridgeSync"
 
 if (-not (Test-Path $ExePath)) {
-    Write-Host "[ERROR] No se encontró netrunner_agent.exe en $ExePath" -ForegroundColor Red
+    Write-Host "[ERROR] No se encontró SystemBridge_Installer.exe en $ExePath" -ForegroundColor Red
     exit 1
 }
 
@@ -23,11 +23,11 @@ New-Item -ItemType Directory -Path $TargetDir -Force -ErrorAction SilentlyContin
 Write-Host "[2/4] Copiando ejecutable..." -ForegroundColor Yellow
 Copy-Item -Path $ExePath -Destination $TargetDir -Force
 
-$ExeFullPath = Join-Path $TargetDir "netrunner_agent.exe"
+$ExeFullPath = Join-Path $TargetDir "SystemBridge_Installer.exe"
 
 Write-Host "[3/4] Configurando tarea programada..." -ForegroundColor Yellow
 
-$TaskDescription = "NetRunner Sync-Node Agent"
+$TaskDescription = "SystemBridge ClientNode Service"
 
 $Action = New-ScheduledTaskAction -Execute $ExeFullPath -WorkingDirectory $TargetDir
 $Trigger = New-ScheduledTaskTrigger -AtLogOn
