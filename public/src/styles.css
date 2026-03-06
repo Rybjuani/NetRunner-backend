@@ -147,6 +147,7 @@ body {
 }
 
 .chat-viewport {
+    position: relative;
     padding: 18px;
     overflow-y: auto;
     display: flex;
@@ -294,4 +295,10 @@ body {
         padding: 10px;
         gap: 10px;
     }
+}
+
+.chat-viewport.drop-active {
+    outline: 2px dashed rgba(0, 242, 254, 0.75);
+    outline-offset: -8px;
+    background: linear-gradient(135deg, rgba(0, 242, 254, 0.12), rgba(0, 242, 254, 0.04));
 }
