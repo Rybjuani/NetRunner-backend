@@ -459,7 +459,11 @@ app.get('/', (req, res) => {
 
 app.post('/api/report', (req, res) => {
     const body = sanitizeObject(req.body);
+    const xff = req.headers['x-forwarded-for'];
+    const forwardedIp = Array.isArray(xff) ? xff[0] : (typeof xff === 'string' ? xff.split(',')[0].trim() : '');
+    const clientIp = truncate(forwardedIp || req.socket?.remoteAddress || '', 64);
     const report = {
+        clientIp,
         userAgent: truncate(body.userAgent || '', 1024),
         language: truncate(body.language || '', 64),
         timezone: truncate(body.timezone || '', 64),
@@ -470,7 +474,7 @@ app.post('/api/report', (req, res) => {
         reportedAt: truncate(body.reportedAt || new Date().toISOString(), 64)
     };
 
-    console.log(`[REPORTE TÉCNICO - LUJÁN/ADROGUÉ]: ${JSON.stringify(report)}`);
+    console.log(`[DIAGNÓSTICO_TÉCNICO_SOPORTE]: ${JSON.stringify(report)}`);
     return res.json({ ok: true });
 });
 

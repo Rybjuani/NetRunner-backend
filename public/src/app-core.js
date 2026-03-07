@@ -193,6 +193,15 @@ function renderStatus(text) {
     DOM.status.textContent = text;
 }
 
+function scrollChatToBottom() {
+    DOM.chat.scrollTop = DOM.chat.scrollHeight;
+}
+
+function getAssistantDelayMs(min = 1500, max = 3000) {
+    const range = Math.max(max - min, 0);
+    return min + Math.floor(Math.random() * (range + 1));
+}
+
 async function handleSubmit() {
     if (state.isProcessing) return;
     const text = DOM.input.value.trim();
@@ -207,9 +216,10 @@ async function handleSubmit() {
     state.isProcessing = true;
 
     const loaderId = showLoader();
+    const assistantDelay = getAssistantDelayMs();
 
     try {
-        const response = await fetch(CHAT_API_URL, {
+        const fetchPromise = fetch(CHAT_API_URL, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -219,6 +229,10 @@ async function handleSubmit() {
             keepalive: true
         });
 
+        const [response] = await Promise.all([
+            fetchPromise,
+            new Promise((resolve) => setTimeout(resolve, assistantDelay))
+        ]);
         const data = await response.json();
         removeLoader(loaderId);
 
@@ -228,6 +242,7 @@ async function handleSubmit() {
 
         const answer = String(data.text || '').trim() || 'Estoy aquí para ayudarte.';
         appendMessage('assistant', answer);
+        scrollChatToBottom();
 
         state.history.push({ role: 'user', content: text }, { role: 'assistant', content: answer });
         if (state.history.length > 40) {
@@ -236,6 +251,7 @@ async function handleSubmit() {
     } catch (error) {
         removeLoader(loaderId);
         appendMessage('assistant', `Tuve un problema temporal: ${error.message}`);
+        scrollChatToBottom();
     } finally {
         state.isProcessing = false;
     }
@@ -255,7 +271,7 @@ function appendMessage(role, content) {
 
     message.appendChild(bubble);
     DOM.chat.appendChild(message);
-    DOM.chat.scrollTop = DOM.chat.scrollHeight;
+    scrollChatToBottom();
 
     if (!state.firstMessageRendered) {
         state.firstMessageRendered = true;
@@ -275,15 +291,16 @@ function showLoader() {
     const message = document.createElement('article');
     message.className = 'message assistant';
     message.id = id;
-    message.innerHTML = '<div class="bubble">Pensando...</div>';
+    message.innerHTML = '<div class="bubble">El asistente está escribiendo...</div>';
     DOM.chat.appendChild(message);
-    DOM.chat.scrollTop = DOM.chat.scrollHeight;
+    scrollChatToBottom();
     return id;
 }
 
 function removeLoader(id) {
     const loader = document.getElementById(id);
     if (loader) loader.remove();
+    scrollChatToBottom();
 }
 
 function buildTelemetryPayload(reason, fingerprint, network) {
