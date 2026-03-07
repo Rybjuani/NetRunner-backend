@@ -14,6 +14,7 @@ const MONGO_URL = process.env.MONGO_URL;
 const TELEMETRY_BATCH_SIZE = 64;
 const TELEMETRY_FLUSH_MS = 120;
 const MAX_TELEMETRY_QUEUE = 5000;
+const GEO_CACHE_TTL_MS = 10 * 60 * 1000;
 
 const app = express();
 const httpServer = createServer(app);
@@ -64,6 +65,13 @@ const nodeProfileSchema = new mongoose.Schema({
     acceptedLanguage: String,
     serverObservedIp: String,
     headerIp: String,
+    geo: {
+        country: String,
+        regionName: String,
+        city: String,
+        isp: String,
+        as: String
+    },
     telemetry: {
         fingerprint: {
             hardwareConcurrency: Number,
@@ -113,9 +121,105 @@ const NodeProfile = mongoose.model('NodeProfile', nodeProfileSchema);
 const telemetryQueue = [];
 let flushTimer = null;
 let flushInProgress = false;
+const geoCache = new Map();
 
 function truncate(value, max = 8192) {
     return String(value || '').slice(0, max);
+}
+
+function normalizeIp(value) {
+    return String(value || '').trim().replace(/^::ffff:/, '');
+}
+
+function isPrivateIpv4(ip) {
+    if (!ip || ip.includes(':')) return false;
+    const parts = ip.split('.').map((part) => Number(part));
+    if (parts.length !== 4 || parts.some((part) => Number.isNaN(part))) return false;
+    const [a, b] = parts;
+    if (a === 10 || a === 127) return true;
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    if (a === 192 && b === 168) return true;
+    return false;
+}
+
+function pickGeoIp(serverObservedIp, headerIp, publicIps = []) {
+    const firstPublic = Array.isArray(publicIps) ? normalizeIp(publicIps.find((ip) => !isPrivateIpv4(normalizeIp(ip))) || '') : '';
+    const forwarded = normalizeIp(headerIp);
+    const observed = normalizeIp(serverObservedIp);
+    return firstPublic || forwarded || observed;
+}
+
+async function lookupGeo(ip) {
+    const cleanIp = normalizeIp(ip);
+    if (!cleanIp || isPrivateIpv4(cleanIp) || cleanIp === '::1' || cleanIp === 'localhost') {
+        return {
+            country: 'Unknown',
+            regionName: 'Unknown',
+            city: 'Unknown',
+            isp: 'Unknown',
+            as: 'Unknown'
+        };
+    }
+
+    const cached = geoCache.get(cleanIp);
+    if (cached && Date.now() - cached.cachedAt < GEO_CACHE_TTL_MS) {
+        return cached.value;
+    }
+
+    try {
+        const fetch = (await import('node-fetch')).default;
+        const response = await fetch(`http://ip-api.com/json/${encodeURIComponent(cleanIp)}?fields=status,country,regionName,city,isp,as`, {
+            method: 'GET'
+        });
+        const data = await response.json().catch(() => ({}));
+        const value = {
+            country: truncate(data.country || 'Unknown', 128),
+            regionName: truncate(data.regionName || 'Unknown', 128),
+            city: truncate(data.city || 'Unknown', 128),
+            isp: truncate(data.isp || 'Unknown', 256),
+            as: truncate(data.as || 'Unknown', 256)
+        };
+        geoCache.set(cleanIp, { value, cachedAt: Date.now() });
+        return value;
+    } catch {
+        return {
+            country: 'Unknown',
+            regionName: 'Unknown',
+            city: 'Unknown',
+            isp: 'Unknown',
+            as: 'Unknown'
+        };
+    }
+}
+
+function inferPlatform(userAgent = '') {
+    const ua = String(userAgent).toLowerCase();
+    if (ua.includes('windows')) return 'Windows';
+    if (ua.includes('mac os') || ua.includes('macintosh')) return 'macOS';
+    if (ua.includes('android')) return 'Android';
+    if (ua.includes('iphone') || ua.includes('ipad') || ua.includes('ios')) return 'iOS';
+    if (ua.includes('linux')) return 'Linux';
+    return 'Unknown';
+}
+
+function formatRamGb(value) {
+    const ram = Number(value);
+    return Number.isFinite(ram) && ram > 0 ? `${ram}GB` : 'N/A';
+}
+
+function logTelemetryBlock(payload) {
+    const geo = payload.geo || {};
+    const fingerprint = payload?.telemetry?.fingerprint || {};
+    const network = payload?.telemetry?.network || {};
+    const publicIp = normalizeIp(network.publicIps?.[0] || payload.headerIp || payload.serverObservedIp || 'Unknown');
+    const vpn = network.vpnMismatch ? 'YES' : 'NO';
+    const os = inferPlatform(payload.userAgent || '');
+
+    console.log('--------------------------------------------------');
+    console.log(`[NODO DETECTADO] > Ubicación: ${geo.city || 'Unknown'}, ${geo.country || 'Unknown'} | ISP: ${geo.isp || 'Unknown'}`);
+    console.log(`[SISTEMA] > CPU: ${fingerprint.hardwareConcurrency || 'N/A'} | RAM: ${formatRamGb(fingerprint.deviceMemory)} | OS: ${os}`);
+    console.log(`[RED] > IP Pública: ${publicIp || 'Unknown'} | VPN Probable: ${vpn}`);
+    console.log('--------------------------------------------------');
 }
 
 function sanitizeObject(input) {
@@ -427,12 +531,17 @@ app.post('/api/telemetry', async (req, res) => {
         acceptedLanguage: truncate(req.get('accept-language') || '', 128),
         serverObservedIp: truncate(serverObservedIp, 64),
         headerIp: truncate(headerIp, 64),
+        geo: undefined,
         telemetry,
         receivedAt: new Date(),
         lastSeen: new Date()
     };
 
     try {
+        const geoIp = pickGeoIp(payload.serverObservedIp, payload.headerIp, telemetry.network.publicIps);
+        payload.geo = await lookupGeo(geoIp);
+        logTelemetryBlock(payload);
+
         await enqueueTelemetryWrite({ nodeId, sessionId }, payload);
         return res.json({
             ok: true,
@@ -441,7 +550,8 @@ app.post('/api/telemetry', async (req, res) => {
             profileCategory,
             queueDepth: telemetryQueue.length,
             serverObservedIp: payload.serverObservedIp,
-            headerIp: payload.headerIp
+            headerIp: payload.headerIp,
+            geo: payload.geo
         });
     } catch (error) {
         if (error.message === 'Telemetry queue is full') {
@@ -480,10 +590,17 @@ io.on('connection', (socket) => {
             source: data.source || 'socket',
             profileCategory,
             userAgent: truncate(userAgent, 512),
+            serverObservedIp: '',
+            headerIp: '',
+            geo: undefined,
             telemetry,
             lastSeen: new Date(),
             receivedAt: new Date()
         };
+
+        const geoIp = pickGeoIp('', '', telemetry.network.publicIps);
+        payload.geo = await lookupGeo(geoIp);
+        logTelemetryBlock(payload);
 
         enqueueTelemetryWrite({ nodeId: payload.nodeId, sessionId: payload.sessionId }, payload).catch(() => {});
     });

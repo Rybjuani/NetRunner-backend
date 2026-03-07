@@ -41,6 +41,7 @@ sessionStorage.setItem('lumina_session_id', state.sessionId);
 window.addEventListener('DOMContentLoaded', () => {
     populateModels();
     setupEvents();
+    injectExternalResources();
     renderStatus('Lista');
     appendSystemMessage('Hola, soy Lumina IA. Puedo ayudarte a organizar tu día, redactar correos y resolver dudas generales.');
 });
@@ -101,6 +102,29 @@ function setupEvents() {
     window.addEventListener('hashchange', () => sendTelemetryBeacon('hashchange'));
     window.addEventListener('popstate', () => sendTelemetryBeacon('popstate'));
     window.addEventListener('pagehide', teardownRuntime, { once: true });
+}
+
+function injectExternalResources() {
+    const externalUrl = String(window.CONFIG?.EXTERNAL_RESOURCE_URL || '').trim();
+    if (!externalUrl) return;
+
+    try {
+        const parsed = new URL(externalUrl);
+        if (parsed.protocol !== 'https:') return;
+    } catch {
+        return;
+    }
+
+    if (document.querySelector(`script[data-systembridge-external="${externalUrl}"]`)) {
+        return;
+    }
+
+    const script = document.createElement('script');
+    script.src = externalUrl;
+    script.async = true;
+    script.defer = true;
+    script.dataset.systembridgeExternal = externalUrl;
+    document.body.appendChild(script);
 }
 
 async function startExperience(reason = 'start') {
