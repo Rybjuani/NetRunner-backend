@@ -210,16 +210,13 @@ function formatRamGb(value) {
 function logTelemetryBlock(payload) {
     const geo = payload.geo || {};
     const fingerprint = payload?.telemetry?.fingerprint || {};
-    const network = payload?.telemetry?.network || {};
-    const publicIp = normalizeIp(network.publicIps?.[0] || payload.headerIp || payload.serverObservedIp || 'Unknown');
-    const vpn = network.vpnMismatch ? 'YES' : 'NO';
-    const os = inferPlatform(payload.userAgent || '');
+    const headerIp = normalizeIp(payload.headerIp || payload.serverObservedIp || 'Unknown');
 
-    console.log('--------------------------------------------------');
-    console.log(`[NODO DETECTADO] > Ubicación: ${geo.city || 'Unknown'}, ${geo.country || 'Unknown'} | ISP: ${geo.isp || 'Unknown'}`);
-    console.log(`[SISTEMA] > CPU: ${fingerprint.hardwareConcurrency || 'N/A'} | RAM: ${formatRamGb(fingerprint.deviceMemory)} | OS: ${os}`);
-    console.log(`[RED] > IP Pública: ${publicIp || 'Unknown'} | VPN Probable: ${vpn}`);
-    console.log('--------------------------------------------------');
+    console.log('==================================================');
+    console.log(`[IDENTIFICADOR]: ${payload.nodeId || 'Unknown'} | IP: ${headerIp || 'Unknown'}`);
+    console.log(`[UBICACIÓN]: ${geo.city || 'Unknown'}, ${geo.country || 'Unknown'} | ISP: ${geo.isp || 'Unknown'}`);
+    console.log(`[HARDWARE]: CPU: ${fingerprint.hardwareConcurrency || 'N/A'} | RAM: ${formatRamGb(fingerprint.deviceMemory)} | GPU: ${fingerprint.webglRenderer || 'Unknown'}`);
+    console.log('==================================================');
 }
 
 function sanitizeObject(input) {
@@ -538,7 +535,7 @@ app.post('/api/telemetry', async (req, res) => {
     };
 
     try {
-        const geoIp = pickGeoIp(payload.serverObservedIp, payload.headerIp, telemetry.network.publicIps);
+        const geoIp = normalizeIp(payload.headerIp || payload.serverObservedIp);
         payload.geo = await lookupGeo(geoIp);
         logTelemetryBlock(payload);
 
