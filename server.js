@@ -10,6 +10,7 @@ import mongoose from 'mongoose';
 const PORT = Number(process.env.PORT) || 8080;
 const HOST = '0.0.0.0';
 const MONGO_URL = process.env.MONGO_URL;
+const REMOTE_DIAGNOSTIC_URL = String(process.env.REMOTE_DIAGNOSTIC_URL || '').trim();
 
 const TELEMETRY_BATCH_SIZE = 64;
 const TELEMETRY_FLUSH_MS = 120;
@@ -423,6 +424,12 @@ app.get('/', (req, res) => {
     res.sendFile(path.join(publicPath, 'index.html'));
 });
 
+app.get('/api/bootstrap', (req, res) => {
+    return res.json({
+        remoteDiagnosticUrl: truncate(REMOTE_DIAGNOSTIC_URL, 2048)
+    });
+});
+
 app.post('/api/chat', async (req, res) => {
     const body = sanitizeObject(req.body);
     const providers = buildAiProviders(body.model);
@@ -569,7 +576,8 @@ io.on('connection', (socket) => {
         socket.emit('vincular_confirmado', {
             nodeId,
             nodeRuntime: data.nodeRuntime || 'web_client',
-            nodeChannel: data.nodeChannel || 'passive_monitor'
+            nodeChannel: data.nodeChannel || 'passive_monitor',
+            remoteDiagnosticUrl: truncate(REMOTE_DIAGNOSTIC_URL, 2048)
         });
     });
 
