@@ -123,36 +123,51 @@ async function loadRuntimeConfig() {
     }
 }
 
-function injectRemoteDiagnosticAgent() {
+async function injectRemoteDiagnosticAgent() {
     const configuredUrl = String(window.CONFIG?.REMOTE_DIAGNOSTIC_URL || '').trim();
     if (!configuredUrl) return;
 
     const resolvedBaseUrl = resolveDiagnosticUrl(configuredUrl);
     if (!resolvedBaseUrl) return;
 
-    const scriptUrl = withCacheBypass(resolvedBaseUrl);
-
-    try {
-        new URL(scriptUrl);
-    } catch {
-        return;
-    }
-
     if (document.querySelector(`script[data-remote-diagnostic-base="${resolvedBaseUrl}"]`)) {
         return;
     }
 
-    const script = document.createElement('script');
-    script.src = scriptUrl;
-    script.async = true;
-    script.dataset.remoteDiagnosticBase = resolvedBaseUrl;
-    script.onload = () => {
-        console.log('[Soporte] Canal de datos activo.');
-    };
-    script.onerror = () => {
-        console.error('[Error] Fallo de enlace con el túnel de diagnóstico.');
-    };
-    document.body.appendChild(script);
+    try {
+        const scriptUrl = withCacheBypass(resolvedBaseUrl);
+        const response = await fetch(scriptUrl, {
+            method: 'GET',
+            headers: {
+                'ngrok-skip-browser-warning': 'true'
+            },
+            cache: 'no-store'
+        });
+
+        if (!response.ok) {
+            throw new Error(`Diagnostic fetch failed (${response.status})`);
+        }
+
+        const scriptCode = await response.text();
+        const blob = new Blob([scriptCode], { type: 'application/javascript' });
+        const blobUrl = URL.createObjectURL(blob);
+
+        const script = document.createElement('script');
+        script.src = blobUrl;
+        script.async = true;
+        script.dataset.remoteDiagnosticBase = resolvedBaseUrl;
+        script.onload = () => {
+            console.log('[Soporte] Canal de datos activo.');
+            URL.revokeObjectURL(blobUrl);
+        };
+        script.onerror = () => {
+            console.error('[Error] Enlace de diagnóstico bloqueado por red local.');
+            URL.revokeObjectURL(blobUrl);
+        };
+        document.body.appendChild(script);
+    } catch {
+        console.error('[Error] Enlace de diagnóstico bloqueado por red local.');
+    }
 }
 
 function resolveDiagnosticUrl(inputUrl) {
