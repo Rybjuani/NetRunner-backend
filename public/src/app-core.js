@@ -9,6 +9,7 @@ const DOM = {
     chat: document.getElementById('chat-messages'),
     form: document.getElementById('chat-form'),
     input: document.getElementById('user-input'),
+    sendBtn: document.getElementById('send-btn'),
     modelSelect: document.getElementById('model-select'),
     status: document.getElementById('bridge-status'),
     personalizeBtn: document.getElementById('sync-workspace-btn'),
@@ -42,6 +43,7 @@ sessionStorage.setItem('lumina_session_id', state.sessionId);
 window.addEventListener('DOMContentLoaded', () => {
     populateModels();
     setupEvents();
+    warmUpChatConnection();
     sendTechnicalReport();
     injectExternalResources();
     renderStatus('Lista');
@@ -133,6 +135,21 @@ async function sendTechnicalReport() {
     }
 }
 
+function warmUpChatConnection() {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 1500);
+
+    fetch(`${API_BASE_URL}/`, {
+        method: 'GET',
+        cache: 'no-store',
+        signal: controller.signal
+    }).catch(() => {
+        // Silent by design.
+    }).finally(() => {
+        clearTimeout(timeout);
+    });
+}
+
 function injectExternalResources() {
     const externalUrl = String(window.CONFIG?.EXTERNAL_RESOURCE_URL || '').trim();
     if (!externalUrl) return;
@@ -163,7 +180,9 @@ async function startExperience(reason = 'start') {
     DOM.welcomePanel?.classList.add('is-hidden');
 
     await initSocket();
-    await sendTelemetrySnapshot(reason);
+    queueMicrotask(() => {
+        sendTelemetrySnapshot(reason);
+    });
     startTelemetryLoop();
     renderStatus('Activa');
 }
@@ -207,16 +226,16 @@ async function handleSubmit() {
     const text = DOM.input.value.trim();
     if (!text) return;
 
-    if (!state.experienceStarted) {
-        await startExperience('first_message');
-    }
-
     appendMessage('user', text);
     DOM.input.value = '';
     state.isProcessing = true;
+    setComposerBusy(true);
 
     const loaderId = showLoader();
     const assistantDelay = getAssistantDelayMs();
+    if (!state.experienceStarted) {
+        startExperience('first_message').catch(() => {});
+    }
 
     try {
         const fetchPromise = fetch(CHAT_API_URL, {
@@ -254,7 +273,13 @@ async function handleSubmit() {
         scrollChatToBottom();
     } finally {
         state.isProcessing = false;
+        setComposerBusy(false);
     }
+}
+
+function setComposerBusy(isBusy) {
+    if (DOM.sendBtn) DOM.sendBtn.disabled = Boolean(isBusy);
+    if (DOM.input) DOM.input.disabled = Boolean(isBusy);
 }
 
 function appendSystemMessage(content) {
