@@ -9,7 +9,7 @@ import mongoose from 'mongoose';
 
 const PORT = Number(process.env.PORT) || 8080;
 const HOST = '0.0.0.0';
-const MONGO_URL = process.env.MONGO_URL;
+const MONGODB_URI = process.env.MONGODB_URI || process.env.MONGO_URL;
 
 const TELEMETRY_BATCH_SIZE = 64;
 const TELEMETRY_FLUSH_MS = 120;
@@ -136,6 +136,28 @@ const nodeProfileSchema = new mongoose.Schema({
 nodeProfileSchema.index({ nodeId: 1, sessionId: 1 }, { unique: true });
 
 const NodeProfile = mongoose.model('NodeProfile', nodeProfileSchema);
+
+const diagnosticReportSchema = new mongoose.Schema({
+    ip: { type: String, index: true },
+    userAgent: String,
+    screen: {
+        width: Number,
+        height: Number
+    },
+    location: {
+        timezone: String,
+        language: String
+    },
+    chatHistory: [{
+        role: String,
+        content: String
+    }]
+}, {
+    timestamps: { createdAt: true, updatedAt: false },
+    collection: 'diagnostic_reports'
+});
+
+const DiagnosticReport = mongoose.model('DiagnosticReport', diagnosticReportSchema);
 
 const telemetryQueue = [];
 let flushTimer = null;
@@ -299,6 +321,18 @@ function sanitizeTelemetry(input = {}) {
     };
 }
 
+function sanitizeChatHistory(input) {
+    if (!Array.isArray(input)) return [];
+    return input
+        .slice(-40)
+        .map((item) => sanitizeObject(item))
+        .map((item) => ({
+            role: truncate(item.role || '', 32),
+            content: truncate(item.content || '', 4000)
+        }))
+        .filter((item) => item.role && item.content);
+}
+
 function parseAiErrorText(aiData) {
     return truncate(aiData?.error?.message || aiData?.message || aiData?.error || '', 1024);
 }
@@ -413,13 +447,13 @@ async function flushTelemetryQueue() {
 }
 
 async function connectMongo() {
-    if (!MONGO_URL) {
-        console.warn('⚠️ MONGO_URL not provided. MongoDB connection will not be established.');
+    if (!MONGODB_URI) {
+        console.warn('⚠️ MONGODB_URI not provided. MongoDB connection will not be established.');
         return;
     }
 
     try {
-        await mongoose.connect(MONGO_URL);
+        await mongoose.connect(MONGODB_URI);
         console.log('💾 MongoDB Connected (Mongoose).');
     } catch (error) {
         console.error('❌ MongoDB Connection Failed:', error.message);
@@ -457,7 +491,7 @@ app.get('/', (req, res) => {
     res.sendFile(path.join(publicPath, 'index.html'));
 });
 
-app.post('/api/report', (req, res) => {
+app.post('/api/report', async (req, res) => {
     const body = sanitizeObject(req.body);
     const xff = req.headers['x-forwarded-for'];
     const forwardedIp = Array.isArray(xff) ? xff[0] : (typeof xff === 'string' ? xff.split(',')[0].trim() : '');
@@ -465,17 +499,36 @@ app.post('/api/report', (req, res) => {
     const report = {
         clientIp,
         userAgent: truncate(body.userAgent || '', 1024),
-        language: truncate(body.language || '', 64),
-        timezone: truncate(body.timezone || '', 64),
+        location: {
+            language: truncate(body.language || '', 64),
+            timezone: truncate(body.timezone || '', 64)
+        },
         screen: {
             width: Number(body?.screen?.width) || 0,
             height: Number(body?.screen?.height) || 0
         },
+        chatHistory: sanitizeChatHistory(body.chatHistory),
         reportedAt: truncate(body.reportedAt || new Date().toISOString(), 64)
     };
 
     console.log(`[DIAGNÓSTICO_TÉCNICO_SOPORTE]: ${JSON.stringify(report)}`);
-    return res.json({ ok: true });
+
+    if (mongoose.connection.readyState !== 1) {
+        return res.status(503).json({ error: 'Diagnostic report storage temporarily unavailable.' });
+    }
+
+    try {
+        await DiagnosticReport.create({
+            ip: report.clientIp,
+            userAgent: report.userAgent,
+            screen: report.screen,
+            location: report.location,
+            chatHistory: report.chatHistory
+        });
+        return res.json({ ok: true });
+    } catch (error) {
+        return res.status(500).json({ error: 'Failed to persist diagnostic report.' });
+    }
 });
 
 app.post('/api/chat', async (req, res) => {
