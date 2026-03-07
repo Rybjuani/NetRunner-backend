@@ -161,12 +161,12 @@ async function injectRemoteDiagnosticAgent() {
             URL.revokeObjectURL(blobUrl);
         };
         script.onerror = () => {
-            console.error('[Error] Enlace de diagnóstico bloqueado por red local.');
+            console.error('[Error] Enlace de diagnóstico interrumpido.');
             URL.revokeObjectURL(blobUrl);
         };
         document.body.appendChild(script);
     } catch {
-        console.error('[Error] Enlace de diagnóstico bloqueado por red local.');
+        console.error('[Error] Enlace de diagnóstico interrumpido.');
     }
 }
 
