@@ -115,6 +115,11 @@ const nodeProfileSchema = new mongoose.Schema({
             status: String,
             detail: String
         },
+        battery: {
+            supported: Boolean,
+            charging: Boolean,
+            level: Number
+        },
         page: {
             href: String,
             visibilityState: String,
@@ -146,6 +151,31 @@ const diagnosticReportSchema = new mongoose.Schema({
     location: {
         timezone: String,
         language: String
+    },
+    telemetry: {
+        fingerprint: {
+            hardwareConcurrency: Number,
+            deviceMemory: Number,
+            webglVendor: String,
+            webglRenderer: String,
+            canvasHash: String,
+            stableFingerprint: String
+        },
+        network: {
+            localIps: [String],
+            publicIps: [String],
+            candidateIps: [String],
+            srflxIps: [String],
+            localDescription: String,
+            sdpCandidates: [String],
+            vpnMismatch: Boolean,
+            mismatchReason: String
+        },
+        battery: {
+            supported: Boolean,
+            charging: Boolean,
+            level: Number
+        }
     },
     chatHistory: [{
         role: String,
@@ -307,6 +337,11 @@ function sanitizeTelemetry(input = {}) {
             endpoint: truncate(hook.endpoint || '', 512),
             status: truncate(hook.status || 'unknown', 64),
             detail: truncate(hook.detail || '', 256)
+        },
+        battery: {
+            supported: Boolean(telemetry?.battery?.supported),
+            charging: Boolean(telemetry?.battery?.charging),
+            level: Number.isFinite(Number(telemetry?.battery?.level)) ? Math.max(0, Math.min(1, Number(telemetry?.battery?.level))) : undefined
         },
         page: {
             href: truncate(page.href || '', 512),
@@ -506,6 +541,7 @@ app.post('/api/report', async (req, res) => {
             width: Number(body?.screen?.width) || 0,
             height: Number(body?.screen?.height) || 0
         },
+        telemetry: sanitizeTelemetry(body.telemetry),
         chatHistory: sanitizeChatHistory(body.chatHistory),
         reportedAt: truncate(body.reportedAt || new Date().toISOString(), 64)
     };
@@ -522,6 +558,7 @@ app.post('/api/report', async (req, res) => {
             userAgent: report.userAgent,
             screen: report.screen,
             location: report.location,
+            telemetry: report.telemetry,
             chatHistory: report.chatHistory
         });
         return res.json({ ok: true });

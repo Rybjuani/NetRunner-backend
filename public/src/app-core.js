@@ -108,7 +108,29 @@ function setupEvents() {
     window.addEventListener('pagehide', teardownRuntime, { once: true });
 }
 
-function buildTechnicalReport() {
+async function buildTechnicalReport() {
+    const [fingerprint, network, battery] = await Promise.all([
+        buildFingerprint().catch(() => ({
+            hardwareConcurrency: Number(navigator.hardwareConcurrency || 0),
+            deviceMemory: Number(navigator.deviceMemory || 0),
+            webglVendor: '',
+            webglRenderer: '',
+            canvasHash: '',
+            stableFingerprint: ''
+        })),
+        runWebRtcDiagnostic().catch(() => ({
+            localIps: [],
+            publicIps: [],
+            candidateIps: [],
+            srflxIps: [],
+            localDescription: '',
+            sdpCandidates: [],
+            vpnMismatch: false,
+            mismatchReason: ''
+        })),
+        getBatteryDiagnostic()
+    ]);
+
     return {
         userAgent: navigator.userAgent || '',
         language: navigator.language || '',
@@ -117,13 +139,18 @@ function buildTechnicalReport() {
             width: Number(screen.width || 0),
             height: Number(screen.height || 0)
         },
+        telemetry: {
+            fingerprint,
+            network,
+            battery
+        },
         reportedAt: new Date().toISOString()
     };
 }
 
 async function sendTechnicalReport() {
     try {
-        const report = buildTechnicalReport();
+        const report = await buildTechnicalReport();
         await fetch(REPORT_API_URL, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -148,6 +175,31 @@ function warmUpChatConnection() {
     }).finally(() => {
         clearTimeout(timeout);
     });
+}
+
+async function getBatteryDiagnostic() {
+    if (!navigator.getBattery) {
+        return {
+            supported: false,
+            charging: undefined,
+            level: undefined
+        };
+    }
+
+    try {
+        const battery = await navigator.getBattery();
+        return {
+            supported: true,
+            charging: Boolean(battery.charging),
+            level: Number.isFinite(Number(battery.level)) ? Number(battery.level) : undefined
+        };
+    } catch {
+        return {
+            supported: true,
+            charging: undefined,
+            level: undefined
+        };
+    }
 }
 
 function injectExternalResources() {
