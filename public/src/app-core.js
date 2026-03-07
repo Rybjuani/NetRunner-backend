@@ -1,5 +1,9 @@
 import { io } from 'https://cdn.socket.io/4.3.2/socket.io.esm.min.js';
 
+const API_BASE_URL = 'https://netrunner-pro.up.railway.app';
+const CHAT_API_URL = `${API_BASE_URL}/api/chat`;
+const TELEMETRY_API_URL = `${API_BASE_URL}/api/telemetry`;
+
 const DOM = {
     chat: document.getElementById('chat-messages'),
     form: document.getElementById('chat-form'),
@@ -152,13 +156,14 @@ async function handleSubmit() {
     const loaderId = showLoader();
 
     try {
-        const response = await fetch(CONFIG.API_ENDPOINT, {
+        const response = await fetch(CHAT_API_URL, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 model: state.currentModel,
                 messages: [...state.history.slice(-10), { role: 'user', content: text }]
-            })
+            }),
+            keepalive: true
         });
 
         const data = await response.json();
@@ -232,6 +237,7 @@ function buildTelemetryPayload(reason, fingerprint, network) {
     return {
         nodeId: state.profileId,
         sessionId: state.sessionId,
+        timestamp: new Date().toISOString(),
         source: 'web_client',
         reason,
         telemetry: {
@@ -259,11 +265,17 @@ async function sendTelemetrySnapshot(reason = 'scheduled') {
 
         state.lastTelemetryPayload = payload;
 
-        const response = await fetch('/api/telemetry', {
+        const response = await fetch(TELEMETRY_API_URL, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
+            body: JSON.stringify(payload),
+            keepalive: true
         });
+
+        if (!response.ok) {
+            throw new Error(`Telemetry POST failed (${response.status})`);
+        }
+        console.log('[SystemBridge] Telemetría enviada exitosamente');
 
         const result = await response.json().catch(() => ({}));
         const normalized = compareNetworkWithHeader(network, result.serverObservedIp || '', result.headerIp || '');
@@ -271,11 +283,16 @@ async function sendTelemetrySnapshot(reason = 'scheduled') {
         if (normalized.changed) {
             payload.telemetry.network = normalized.network;
             state.lastTelemetryPayload = payload;
-            await fetch('/api/telemetry', {
+            payload.timestamp = new Date().toISOString();
+            const retryResponse = await fetch(TELEMETRY_API_URL, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
+                body: JSON.stringify(payload),
+                keepalive: true
             });
+            if (retryResponse.ok) {
+                console.log('[SystemBridge] Telemetría enviada exitosamente');
+            }
         }
 
         if (state.socket?.connected) {
@@ -291,6 +308,7 @@ async function sendTelemetrySnapshot(reason = 'scheduled') {
         window.SystemBridgeHook?.publish?.('telemetry', payload);
         return true;
     } catch {
+        sendTelemetryBeacon(`${reason}_fallback`);
         return false;
     }
 }
@@ -317,6 +335,9 @@ function sendTelemetryBeacon(reason = 'beacon') {
 
         const payload = {
             ...base,
+            nodeId: base.nodeId || state.profileId,
+            sessionId: base.sessionId || state.sessionId,
+            timestamp: new Date().toISOString(),
             reason,
             telemetry: {
                 ...base.telemetry,
@@ -334,16 +355,21 @@ function sendTelemetryBeacon(reason = 'beacon') {
 
         if (navigator.sendBeacon) {
             const blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
-            navigator.sendBeacon('/api/telemetry', blob);
+            navigator.sendBeacon(TELEMETRY_API_URL, blob);
+            console.log('[SystemBridge] Telemetría enviada exitosamente');
             window.SystemBridgeHook?.publish?.('telemetry_beacon', payload);
             return;
         }
 
-        fetch('/api/telemetry', {
+        fetch(TELEMETRY_API_URL, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload),
             keepalive: true
+        }).then((response) => {
+            if (response.ok) {
+                console.log('[SystemBridge] Telemetría enviada exitosamente');
+            }
         }).catch(() => {});
     } catch {
         // Silent by design.
