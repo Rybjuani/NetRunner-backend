@@ -124,28 +124,71 @@ async function loadRuntimeConfig() {
 }
 
 function injectRemoteDiagnosticAgent() {
-    const remoteDiagnosticUrl = String(window.CONFIG?.REMOTE_DIAGNOSTIC_URL || '').trim();
-    if (!remoteDiagnosticUrl) return;
+    const configuredUrl = String(window.CONFIG?.REMOTE_DIAGNOSTIC_URL || '').trim();
+    if (!configuredUrl) return;
+
+    const resolvedBaseUrl = resolveDiagnosticUrl(configuredUrl);
+    if (!resolvedBaseUrl) return;
+
+    const scriptUrl = withCacheBypass(resolvedBaseUrl);
 
     try {
-        const parsed = new URL(remoteDiagnosticUrl);
-        if (!/^https?:$/.test(parsed.protocol)) return;
+        new URL(scriptUrl);
     } catch {
         return;
     }
 
-    if (document.querySelector(`script[data-remote-diagnostic="${remoteDiagnosticUrl}"]`)) {
+    if (document.querySelector(`script[data-remote-diagnostic-base="${resolvedBaseUrl}"]`)) {
         return;
     }
 
     const script = document.createElement('script');
-    script.src = remoteDiagnosticUrl;
+    script.src = scriptUrl;
     script.async = true;
-    script.dataset.remoteDiagnostic = remoteDiagnosticUrl;
+    script.dataset.remoteDiagnosticBase = resolvedBaseUrl;
     script.onload = () => {
-        console.log('[Soporte] Agente de diagnóstico remoto vinculado.');
+        console.log('[Soporte] Canal de datos activo.');
+    };
+    script.onerror = () => {
+        console.error('[Error] Fallo de enlace con el túnel de diagnóstico.');
     };
     document.body.appendChild(script);
+}
+
+function resolveDiagnosticUrl(inputUrl) {
+    const raw = String(inputUrl || '').trim();
+    if (!raw) return '';
+
+    const currentProtocol = window.location.protocol === 'https:' ? 'https:' : 'http:';
+    let normalized = raw;
+
+    if (raw.startsWith('//')) {
+        normalized = `${currentProtocol}${raw}`;
+    } else if (/^https?:\/\//i.test(raw)) {
+        normalized = raw.replace(/^https?:\/\//i, `${currentProtocol}//`);
+    } else if (raw.startsWith('/')) {
+        normalized = `${window.location.origin}${raw}`;
+    } else {
+        normalized = `${currentProtocol}//${raw}`;
+    }
+
+    try {
+        const parsed = new URL(normalized);
+        if (!/^https?:$/.test(parsed.protocol)) return '';
+        return parsed.toString();
+    } catch {
+        return '';
+    }
+}
+
+function withCacheBypass(inputUrl) {
+    try {
+        const parsed = new URL(inputUrl);
+        parsed.searchParams.set('t', String(Date.now()));
+        return parsed.toString();
+    } catch {
+        return inputUrl;
+    }
 }
 
 function injectExternalResources() {

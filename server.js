@@ -48,9 +48,28 @@ console.log = (...args) => { writeBridgeLog('INFO', ...args); originalConsoleLog
 console.warn = (...args) => { writeBridgeLog('WARN', ...args); originalConsoleWarn(...args); };
 console.error = (...args) => { writeBridgeLog('ERROR', ...args); originalConsoleError(...args); };
 
+function isAllowedCorsOrigin(origin) {
+    if (!origin) return true;
+    try {
+        const parsed = new URL(origin);
+        const hostname = parsed.hostname.toLowerCase();
+        if (hostname.endsWith('.ngrok-free.dev')) return true;
+        if (hostname === 'netrunner-pro.up.railway.app') return true;
+        if (hostname === 'localhost' || hostname === '127.0.0.1') return true;
+    } catch {
+        return false;
+    }
+    return false;
+}
+
 const io = new SocketIOServer(httpServer, {
     cors: {
-        origin: '*',
+        origin: (origin, callback) => {
+            if (isAllowedCorsOrigin(origin)) {
+                return callback(null, true);
+            }
+            return callback(new Error('CORS origin not allowed'));
+        },
         methods: ['GET', 'POST']
     }
 });
@@ -409,6 +428,21 @@ async function connectMongo() {
 }
 
 app.use(express.json({ limit: '2mb' }));
+app.use((req, res, next) => {
+    const origin = req.get('origin') || '';
+    if (isAllowedCorsOrigin(origin)) {
+        if (origin) res.setHeader('Access-Control-Allow-Origin', origin);
+        res.setHeader('Vary', 'Origin');
+        res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+        res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+    }
+
+    if (req.method === 'OPTIONS') {
+        return res.status(204).end();
+    }
+
+    return next();
+});
 app.use('/public', express.static(publicPath, {
     maxAge: '5m',
     setHeaders: (res, filePath) => {
