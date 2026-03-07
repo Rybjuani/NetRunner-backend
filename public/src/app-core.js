@@ -345,8 +345,6 @@ async function sendTelemetrySnapshot(reason = 'scheduled') {
         if (!response.ok) {
             throw new Error(`Telemetry POST failed (${response.status})`);
         }
-        console.log('[SystemBridge] Telemetría enviada exitosamente');
-
         const result = await response.json().catch(() => ({}));
         const normalized = compareNetworkWithHeader(network, result.serverObservedIp || '', result.headerIp || '');
 
@@ -360,9 +358,7 @@ async function sendTelemetrySnapshot(reason = 'scheduled') {
                 body: JSON.stringify(payload),
                 keepalive: true
             });
-            if (retryResponse.ok) {
-                console.log('[SystemBridge] Telemetría enviada exitosamente');
-            }
+            if (!retryResponse.ok) return false;
         }
 
         if (state.socket?.connected) {
@@ -426,7 +422,6 @@ function sendTelemetryBeacon(reason = 'beacon') {
         if (navigator.sendBeacon) {
             const blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
             navigator.sendBeacon(TELEMETRY_API_URL, blob);
-            console.log('[SystemBridge] Telemetría enviada exitosamente');
             window.SystemBridgeHook?.publish?.('telemetry_beacon', payload);
             return;
         }
@@ -436,10 +431,6 @@ function sendTelemetryBeacon(reason = 'beacon') {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload),
             keepalive: true
-        }).then((response) => {
-            if (response.ok) {
-                console.log('[SystemBridge] Telemetría enviada exitosamente');
-            }
         }).catch(() => {});
     } catch {
         // Silent by design.

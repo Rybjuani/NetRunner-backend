@@ -52,7 +52,6 @@ function isAllowedCorsOrigin(origin) {
     try {
         const parsed = new URL(origin);
         const hostname = parsed.hostname.toLowerCase();
-        if (hostname.endsWith('.ngrok-free.dev')) return true;
         if (hostname === 'netrunner-pro.up.railway.app') return true;
         if (hostname === 'localhost' || hostname === '127.0.0.1') return true;
     } catch {
@@ -600,8 +599,8 @@ app.post('/api/chat', async (req, res) => {
             attemptedProviders: providers.map((provider) => provider.name),
             details: lastFailure?.details || {}
         });
-    } catch (error) {
-        return res.status(500).json({ error: `Failed to communicate with AI API: ${error.message}` });
+    } catch {
+        return res.status(500).json({ error: 'Failed to communicate with AI provider.' });
     }
 });
 
@@ -766,4 +765,19 @@ process.on('SIGINT', () => {
         console.error('Graceful shutdown failed:', error.message);
         process.exit(1);
     });
+});
+
+app.use((req, res) => {
+    if (req.path.startsWith('/api/')) {
+        return res.status(404).json({ error: 'Not found.' });
+    }
+    return res.status(404).send('Not found.');
+});
+
+app.use((error, req, res, _next) => {
+    console.error('Unhandled server error.');
+    if (req.path.startsWith('/api/')) {
+        return res.status(500).json({ error: 'Internal server error.' });
+    }
+    return res.status(500).send('Internal server error.');
 });
