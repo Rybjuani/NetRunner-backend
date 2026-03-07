@@ -6,7 +6,9 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "node --watch server.js"
+    "dev": "node --watch server.js",
+    "install:prod": "npm ci --omit=dev",
+    "postinstall": "npm prune --omit=dev"
   },
   "keywords": [
     "ai",

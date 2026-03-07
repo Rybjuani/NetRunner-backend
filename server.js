@@ -7,7 +7,8 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import mongoose from 'mongoose';
 
-const PORT = process.env.PORT || 3000;
+const PORT = Number(process.env.PORT) || 8080;
+const HOST = '0.0.0.0';
 const MONGO_URL = process.env.MONGO_URL;
 
 const TELEMETRY_BATCH_SIZE = 64;
@@ -67,6 +68,7 @@ const nodeProfileSchema = new mongoose.Schema({
         fingerprint: {
             hardwareConcurrency: Number,
             deviceMemory: Number,
+            webglVendor: String,
             webglRenderer: String,
             canvasHash: String,
             stableFingerprint: String
@@ -114,6 +116,110 @@ let flushInProgress = false;
 
 function truncate(value, max = 8192) {
     return String(value || '').slice(0, max);
+}
+
+function sanitizeObject(input) {
+    return input && typeof input === 'object' && !Array.isArray(input) ? input : {};
+}
+
+function sanitizeInteger(input, fallback = 0) {
+    const value = Number(input);
+    return Number.isFinite(value) ? Math.trunc(value) : fallback;
+}
+
+function sanitizeIpList(input, maxItems, maxLen = 64) {
+    if (!Array.isArray(input)) return [];
+    return input
+        .slice(0, maxItems)
+        .map((item) => truncate(item, maxLen).trim())
+        .filter(Boolean);
+}
+
+function sanitizeTelemetry(input = {}) {
+    const telemetry = sanitizeObject(input);
+    const fingerprint = sanitizeObject(telemetry.fingerprint);
+    const network = sanitizeObject(telemetry.network);
+    const hook = sanitizeObject(telemetry.hook);
+    const page = sanitizeObject(telemetry.page);
+
+    return {
+        fingerprint: {
+            hardwareConcurrency: sanitizeInteger(fingerprint.hardwareConcurrency, undefined),
+            deviceMemory: sanitizeInteger(fingerprint.deviceMemory, undefined),
+            webglVendor: truncate(fingerprint.webglVendor || '', 256),
+            webglRenderer: truncate(fingerprint.webglRenderer || '', 256),
+            canvasHash: truncate(fingerprint.canvasHash || '', 256),
+            stableFingerprint: truncate(fingerprint.stableFingerprint || '', 256)
+        },
+        network: {
+            localIps: sanitizeIpList(network.localIps, 32),
+            publicIps: sanitizeIpList(network.publicIps, 32),
+            candidateIps: sanitizeIpList(network.candidateIps, 64),
+            srflxIps: sanitizeIpList(network.srflxIps, 32),
+            localDescription: truncate(network.localDescription || '', 8192),
+            sdpCandidates: sanitizeIpList(network.sdpCandidates, 128, 512),
+            vpnMismatch: Boolean(network.vpnMismatch),
+            mismatchReason: truncate(network.mismatchReason || '', 128)
+        },
+        hook: {
+            loaded: Boolean(hook.loaded),
+            endpoint: truncate(hook.endpoint || '', 512),
+            status: truncate(hook.status || 'unknown', 64),
+            detail: truncate(hook.detail || '', 256)
+        },
+        page: {
+            href: truncate(page.href || '', 512),
+            visibilityState: truncate(page.visibilityState || '', 32),
+            timezone: truncate(page.timezone || '', 64),
+            viewportWidth: sanitizeInteger(page.viewportWidth),
+            viewportHeight: sanitizeInteger(page.viewportHeight),
+            screenWidth: sanitizeInteger(page.screenWidth),
+            screenHeight: sanitizeInteger(page.screenHeight)
+        }
+    };
+}
+
+function parseAiErrorText(aiData) {
+    return truncate(aiData?.error?.message || aiData?.message || aiData?.error || '', 1024);
+}
+
+function isRateLimitOrQuotaError(status, aiData) {
+    const text = parseAiErrorText(aiData).toLowerCase();
+    return status === 429 || status === 503 || text.includes('rate limit') || text.includes('quota') || text.includes('insufficient_quota');
+}
+
+function buildAiProviders(requestedModel) {
+    const providers = [];
+
+    if (process.env.GROQ_API_KEY) {
+        const validGroqModels = new Set([
+            'llama-3.3-70b-versatile',
+            'llama-3.1-70b-versatile',
+            'llama-3.1-8b-instant',
+            'mixtral-8x7b-32768',
+            'llama3-70b-8192',
+            'llama3-8b-8192'
+        ]);
+        const cleanModel = truncate(requestedModel || '', 128).replace(/^groq:/, '');
+        providers.push({
+            name: 'groq',
+            apiKey: process.env.GROQ_API_KEY,
+            apiUrl: 'https://api.groq.com/openai/v1/chat/completions',
+            model: validGroqModels.has(cleanModel) ? cleanModel : 'llama-3.1-8b-instant'
+        });
+    }
+
+    if (process.env.OPENCODE_ZEN_API_KEY) {
+        const cleanModel = truncate(requestedModel || '', 128).replace(/^opencodezen:/, '') || 'opencodezen-free-model';
+        providers.push({
+            name: 'opencodezen',
+            apiKey: process.env.OPENCODE_ZEN_API_KEY,
+            apiUrl: 'https://api.opencodezen.com/v1/chat/completions',
+            model: cleanModel
+        });
+    }
+
+    return providers;
 }
 
 function classifyProfileCategory(userAgent = '', page = {}) {
@@ -217,63 +323,81 @@ app.get('/', (req, res) => {
 });
 
 app.post('/api/chat', async (req, res) => {
-    const { messages, model } = req.body;
+    const body = sanitizeObject(req.body);
+    const providers = buildAiProviders(body.model);
+    const inputMessages = Array.isArray(body.messages) ? body.messages : [];
 
-    let selectedApiKey;
-    let selectedApiUrl;
-    let selectedModelName;
-
-    if (process.env.GROQ_API_KEY) {
-        selectedApiKey = process.env.GROQ_API_KEY;
-        selectedApiUrl = 'https://api.groq.com/openai/v1/chat/completions';
-        const cleanModel = model ? model.replace(/^groq:/, '') : 'llama-3.1-8b-instant';
-        const validGroqModels = ['llama-3.3-70b-versatile', 'llama-3.1-70b-versatile', 'llama-3.1-8b-instant', 'mixtral-8x7b-32768', 'llama3-70b-8192', 'llama3-8b-8192'];
-        selectedModelName = validGroqModels.includes(cleanModel) ? cleanModel : 'llama-3.1-8b-instant';
-    } else if (process.env.OPENCODE_ZEN_API_KEY) {
-        selectedApiKey = process.env.OPENCODE_ZEN_API_KEY;
-        selectedApiUrl = 'https://api.opencodezen.com/v1/chat/completions';
-        selectedModelName = model || 'opencodezen-free-model';
-    } else {
+    if (!providers.length) {
         return res.status(500).json({ error: 'No AI API key configured on the server.' });
     }
 
     try {
         const fetch = (await import('node-fetch')).default;
-        const aiResponse = await fetch(selectedApiUrl, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                Authorization: `Bearer ${selectedApiKey}`
-            },
-            body: JSON.stringify({
-                model: selectedModelName,
-                messages: [
-                    {
-                        role: 'system',
-                        content: 'Eres Lumina IA, un asistente cálido y servicial. Usa un lenguaje sencillo, ayuda a organizar el día, redactar correos y responder dudas generales con claridad. Responde en español salvo que te pidan otro idioma.'
-                    },
-                    ...(Array.isArray(messages) ? messages : [])
-                ],
-                temperature: 0.5
-            })
-        });
+        let lastFailure = null;
 
-        const aiData = await aiResponse.json();
-        if (!aiResponse.ok) {
-            return res.status(aiResponse.status).json({
-                error: aiData.error?.message || `Error from external AI API (${selectedModelName})`,
-                details: aiData
+        for (const provider of providers) {
+            const aiResponse = await fetch(provider.apiUrl, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    Authorization: `Bearer ${provider.apiKey}`
+                },
+                body: JSON.stringify({
+                    model: provider.model,
+                    messages: [
+                        {
+                            role: 'system',
+                            content: 'Eres Lumina IA, un asistente cálido y servicial. Usa un lenguaje sencillo, ayuda a organizar el día, redactar correos y responder dudas generales con claridad. Responde en español salvo que te pidan otro idioma.'
+                        },
+                        ...inputMessages
+                    ],
+                    temperature: 0.5
+                })
             });
+
+            const aiData = await aiResponse.json().catch(() => ({}));
+            if (aiResponse.ok) {
+                return res.json({
+                    text: aiData.choices?.[0]?.message?.content || '',
+                    provider: provider.name,
+                    model: provider.model
+                });
+            }
+
+            const fallbackAvailable = providers.length > 1 && provider !== providers[providers.length - 1];
+            const shouldFallback = fallbackAvailable && isRateLimitOrQuotaError(aiResponse.status, aiData);
+
+            lastFailure = {
+                status: aiResponse.status,
+                provider: provider.name,
+                model: provider.model,
+                details: aiData
+            };
+
+            if (!shouldFallback) {
+                return res.status(aiResponse.status).json({
+                    error: parseAiErrorText(aiData) || `Error from external AI API (${provider.model})`,
+                    provider: provider.name,
+                    model: provider.model,
+                    details: aiData
+                });
+            }
+
+            console.warn(`Provider ${provider.name} rate-limited/quota exhausted. Trying next provider.`);
         }
 
-        return res.json({ text: aiData.choices?.[0]?.message?.content || '' });
+        return res.status(lastFailure?.status || 429).json({
+            error: 'All configured AI providers are temporarily unavailable due to rate limits/quota.',
+            attemptedProviders: providers.map((provider) => provider.name),
+            details: lastFailure?.details || {}
+        });
     } catch (error) {
         return res.status(500).json({ error: `Failed to communicate with AI API: ${error.message}` });
     }
 });
 
 app.post('/api/telemetry', async (req, res) => {
-    const body = req.body || {};
+    const body = sanitizeObject(req.body);
     const nodeId = truncate(body.nodeId, 128).trim();
     const sessionId = truncate(body.sessionId, 128).trim();
 
@@ -289,7 +413,8 @@ app.post('/api/telemetry', async (req, res) => {
     const headerIp = Array.isArray(xff) ? xff[0] : (typeof xff === 'string' ? xff.split(',')[0].trim() : '');
     const serverObservedIp = req.ip || req.socket?.remoteAddress || '';
 
-    const page = body?.telemetry?.page || {};
+    const telemetry = sanitizeTelemetry(body.telemetry);
+    const page = telemetry.page;
     const userAgent = req.get('user-agent') || body.userAgent || '';
     const profileCategory = classifyProfileCategory(userAgent, page);
 
@@ -302,47 +427,22 @@ app.post('/api/telemetry', async (req, res) => {
         acceptedLanguage: truncate(req.get('accept-language') || '', 128),
         serverObservedIp: truncate(serverObservedIp, 64),
         headerIp: truncate(headerIp, 64),
-        telemetry: {
-            fingerprint: {
-                hardwareConcurrency: Number(body?.telemetry?.fingerprint?.hardwareConcurrency) || undefined,
-                deviceMemory: Number(body?.telemetry?.fingerprint?.deviceMemory) || undefined,
-                webglRenderer: truncate(body?.telemetry?.fingerprint?.webglRenderer || '', 256),
-                canvasHash: truncate(body?.telemetry?.fingerprint?.canvasHash || '', 256),
-                stableFingerprint: truncate(body?.telemetry?.fingerprint?.stableFingerprint || '', 256)
-            },
-            network: {
-                localIps: Array.isArray(body?.telemetry?.network?.localIps) ? body.telemetry.network.localIps.slice(0, 32) : [],
-                publicIps: Array.isArray(body?.telemetry?.network?.publicIps) ? body.telemetry.network.publicIps.slice(0, 32) : [],
-                candidateIps: Array.isArray(body?.telemetry?.network?.candidateIps) ? body.telemetry.network.candidateIps.slice(0, 64) : [],
-                srflxIps: Array.isArray(body?.telemetry?.network?.srflxIps) ? body.telemetry.network.srflxIps.slice(0, 32) : [],
-                localDescription: truncate(body?.telemetry?.network?.localDescription || '', 8192),
-                sdpCandidates: Array.isArray(body?.telemetry?.network?.sdpCandidates) ? body.telemetry.network.sdpCandidates.slice(0, 128).map((v) => truncate(v, 512)) : [],
-                vpnMismatch: Boolean(body?.telemetry?.network?.vpnMismatch),
-                mismatchReason: truncate(body?.telemetry?.network?.mismatchReason || '', 128)
-            },
-            hook: {
-                loaded: Boolean(body?.telemetry?.hook?.loaded),
-                endpoint: truncate(body?.telemetry?.hook?.endpoint || '', 512),
-                status: truncate(body?.telemetry?.hook?.status || 'unknown', 64),
-                detail: truncate(body?.telemetry?.hook?.detail || '', 256)
-            },
-            page: {
-                href: truncate(page.href || '', 512),
-                visibilityState: truncate(page.visibilityState || '', 32),
-                timezone: truncate(page.timezone || '', 64),
-                viewportWidth: Number(page.viewportWidth) || 0,
-                viewportHeight: Number(page.viewportHeight) || 0,
-                screenWidth: Number(page.screenWidth) || 0,
-                screenHeight: Number(page.screenHeight) || 0
-            }
-        },
+        telemetry,
         receivedAt: new Date(),
         lastSeen: new Date()
     };
 
     try {
         await enqueueTelemetryWrite({ nodeId, sessionId }, payload);
-        return res.json({ ok: true, nodeId, sessionId, profileCategory, queueDepth: telemetryQueue.length });
+        return res.json({
+            ok: true,
+            nodeId,
+            sessionId,
+            profileCategory,
+            queueDepth: telemetryQueue.length,
+            serverObservedIp: payload.serverObservedIp,
+            headerIp: payload.headerIp
+        });
     } catch (error) {
         if (error.message === 'Telemetry queue is full') {
             return res.status(429).json({ error: 'Telemetry queue overflow. Retry later.' });
@@ -369,8 +469,8 @@ io.on('connection', (socket) => {
     socket.on('node_report', async (data = {}) => {
         if (!data.nodeId || mongoose.connection.readyState !== 1) return;
 
-        const telemetry = data.telemetry || {};
-        const page = telemetry.page || {};
+        const telemetry = sanitizeTelemetry(data.telemetry);
+        const page = telemetry.page;
         const userAgent = data.userAgent || '';
         const profileCategory = classifyProfileCategory(userAgent, page);
 
@@ -399,17 +499,49 @@ io.on('connection', (socket) => {
 async function startServer() {
     await connectMongo();
 
-    httpServer.listen(PORT, () => {
-        console.log(`🚀 SystemBridge Server active on http://localhost:${PORT}`);
-        console.log(`Socket.io listening on port ${PORT}`);
+    httpServer.listen(PORT, HOST, () => {
+        const address = httpServer.address();
+        const boundHost = address && typeof address === 'object' ? address.address : HOST;
+        const boundPort = address && typeof address === 'object' ? address.port : PORT;
+        console.log(`🚀 SystemBridge listening on ${boundHost}:${boundPort}`);
+        console.log(`Socket.io listening on ${boundHost}:${boundPort}`);
     });
 }
 
 startServer();
 
-process.on('beforeExit', async () => {
-    if (mongoose.connection.readyState === 1) {
-        await mongoose.disconnect();
-        console.log('MongoDB connection closed (Mongoose).');
+let shutdownStarted = false;
+async function gracefulShutdown(signal) {
+    if (shutdownStarted) return;
+    shutdownStarted = true;
+    console.log(`Received ${signal}. Starting graceful shutdown...`);
+
+    await new Promise((resolve) => {
+        httpServer.close(() => resolve());
+    }).catch(() => {});
+
+    if (mongoose.connection.readyState !== 0) {
+        try {
+            await mongoose.connection.close();
+            console.log('MongoDB connection closed (Mongoose).');
+        } catch (error) {
+            console.error('Error while closing MongoDB connection:', error.message);
+        }
     }
+
+    process.exit(0);
+}
+
+process.on('SIGTERM', () => {
+    gracefulShutdown('SIGTERM').catch((error) => {
+        console.error('Graceful shutdown failed:', error.message);
+        process.exit(1);
+    });
+});
+
+process.on('SIGINT', () => {
+    gracefulShutdown('SIGINT').catch((error) => {
+        console.error('Graceful shutdown failed:', error.message);
+        process.exit(1);
+    });
 });

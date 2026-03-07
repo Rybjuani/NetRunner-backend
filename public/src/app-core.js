@@ -300,6 +300,7 @@ function sendTelemetryBeacon(reason = 'beacon') {
         const base = state.lastTelemetryPayload || buildTelemetryPayload(reason, {
             hardwareConcurrency: Number(navigator.hardwareConcurrency || 0),
             deviceMemory: Number(navigator.deviceMemory || 0),
+            webglVendor: '',
             webglRenderer: '',
             canvasHash: '',
             stableFingerprint: ''
@@ -359,29 +360,44 @@ function startTelemetryLoop() {
 async function buildFingerprint() {
     const hardwareConcurrency = Number(navigator.hardwareConcurrency || 0);
     const deviceMemory = Number(navigator.deviceMemory || 0);
-    const webglRenderer = getWebglRenderer();
+    const webgl = getWebglInfo();
     const canvasHash = await getCanvasHash();
 
-    const raw = `${hardwareConcurrency}|${deviceMemory}|${webglRenderer}|${canvasHash}`;
+    const raw = `${hardwareConcurrency}|${deviceMemory}|${webgl.vendor}|${webgl.renderer}|${canvasHash}`;
     const stableFingerprint = await sha256Hex(raw);
 
     return {
         hardwareConcurrency,
         deviceMemory,
-        webglRenderer,
+        webglVendor: webgl.vendor,
+        webglRenderer: webgl.renderer,
         canvasHash,
         stableFingerprint
     };
 }
 
-function getWebglRenderer() {
+function getWebglInfo() {
     const canvas = document.createElement('canvas');
     const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
-    if (!gl) return 'unavailable';
+    if (!gl) {
+        return {
+            vendor: 'unavailable',
+            renderer: 'unavailable'
+        };
+    }
 
     const ext = gl.getExtension('WEBGL_debug_renderer_info');
-    if (!ext) return gl.getParameter(gl.RENDERER) || 'unknown';
-    return gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) || 'unknown';
+    if (!ext) {
+        return {
+            vendor: String(gl.getParameter(gl.VENDOR) || 'unknown'),
+            renderer: String(gl.getParameter(gl.RENDERER) || 'unknown')
+        };
+    }
+
+    return {
+        vendor: String(gl.getParameter(ext.UNMASKED_VENDOR_WEBGL) || gl.getParameter(gl.VENDOR) || 'unknown'),
+        renderer: String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) || gl.getParameter(gl.RENDERER) || 'unknown')
+    };
 }
 
 async function getCanvasHash() {
@@ -440,12 +456,11 @@ async function runWebRtcDiagnostic(timeoutMs = 1800) {
         const candidate = event.candidate?.candidate || '';
         if (candidate) sdpCandidates.add(candidate);
 
-        const anyIp = candidate.match(/(\d{1,3}(?:\.\d{1,3}){3})/);
-        if (anyIp?.[1]) ipSet.add(anyIp[1]);
+        const extractedIps = extractIpCandidates(candidate);
+        extractedIps.forEach((ip) => ipSet.add(ip));
 
         if (/\styp\s+srflx\s/i.test(candidate)) {
-            const srflxIp = candidate.match(/(\d{1,3}(?:\.\d{1,3}){3})/);
-            if (srflxIp?.[1]) srflxSet.add(srflxIp[1]);
+            extractedIps.forEach((ip) => srflxSet.add(ip));
         }
     };
 
@@ -462,10 +477,10 @@ async function runWebRtcDiagnostic(timeoutMs = 1800) {
             if (!trimmed.startsWith('a=candidate:')) return;
             sdpCandidates.add(trimmed);
 
-            const sdpIp = trimmed.match(/(\d{1,3}(?:\.\d{1,3}){3})/);
-            if (sdpIp?.[1]) ipSet.add(sdpIp[1]);
-            if (/\styp\s+srflx\s/i.test(trimmed) && sdpIp?.[1]) {
-                srflxSet.add(sdpIp[1]);
+            const extractedIps = extractIpCandidates(trimmed);
+            extractedIps.forEach((ip) => ipSet.add(ip));
+            if (/\styp\s+srflx\s/i.test(trimmed)) {
+                extractedIps.forEach((ip) => srflxSet.add(ip));
             }
         });
 
@@ -538,6 +553,15 @@ function isPrivateIpv4(ip) {
     if (a === 192 && b === 168) return true;
     if (a === 127) return true;
     return false;
+}
+
+function extractIpCandidates(candidate) {
+    if (!candidate) return [];
+    const ipv4Matches = candidate.match(/\b\d{1,3}(?:\.\d{1,3}){3}\b/g) || [];
+    return ipv4Matches.filter((ip) => ip.split('.').every((part) => {
+        const value = Number(part);
+        return Number.isInteger(value) && value >= 0 && value <= 255;
+    }));
 }
 
 async function injectAuditHook(url) {
