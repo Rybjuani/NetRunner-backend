@@ -157,7 +157,7 @@ async function injectRemoteDiagnosticAgent() {
         script.async = true;
         script.dataset.remoteDiagnosticBase = resolvedBaseUrl;
         script.onload = () => {
-            console.log('[Soporte] Canal de datos activo.');
+            console.log('[Soporte] Agente de diagnóstico vinculado.');
             URL.revokeObjectURL(blobUrl);
         };
         script.onerror = () => {
