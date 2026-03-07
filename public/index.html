@@ -3,42 +3,48 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>SystemBridge | Monitoreo de Nodos Universal</title>
+    <title>Lumina IA | Asistente Inteligente</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
-    <link rel="stylesheet" href="src/styles.css?v=6.1.0">
+    <link rel="stylesheet" href="src/styles.css?v=6.2.0">
 </head>
 <body>
     <div class="app-shell">
         <header class="main-header">
             <div class="brand">
-                <div class="brand-mark"><i class="fa-solid fa-shield-halved"></i></div>
+                <div class="brand-mark"><i class="fa-solid fa-wand-magic-sparkles"></i></div>
                 <div>
-                    <h1 class="logo-text">SystemBridge</h1>
-                    <p class="logo-sub">Monitoreo de Nodos Universal</p>
+                    <h1 class="logo-text">Lumina IA</h1>
+                    <p class="logo-sub">Tu asistente inteligente para el día a día</p>
                 </div>
             </div>
 
             <div class="header-controls">
-                <select id="model-select" aria-label="Modelo"></select>
-                <span id="bridge-status" class="bridge-status" aria-live="polite">Estado</span>
+                <select id="model-select" aria-label="Modo de Lumina"></select>
+                <span id="bridge-status" class="bridge-status" aria-live="polite">Lista</span>
             </div>
         </header>
+
+        <section id="welcome-panel" class="welcome-panel">
+            <h2>Organiza tu día con claridad</h2>
+            <p>Te ayudo a redactar, planificar tareas y resolver dudas en un lenguaje simple.</p>
+            <button id="start-btn" class="start-btn" type="button">Empezar</button>
+        </section>
 
         <main id="chat-messages" class="chat-viewport" aria-live="polite"></main>
 
         <footer class="composer">
             <button id="sync-workspace-btn" class="sync-btn" type="button">
-                <i class="fa-solid fa-wave-square"></i>
-                <span>Snapshot</span>
+                <i class="fa-solid fa-sliders"></i>
+                <span>Personalización</span>
             </button>
 
             <form id="chat-form" class="prompt-box">
                 <textarea
                     id="user-input"
-                    placeholder="Escribe una consulta..."
+                    placeholder="Escribe tu mensaje..."
                     rows="1"
                     spellcheck="false"
                 ></textarea>
@@ -49,7 +55,7 @@
         </footer>
     </div>
 
-    <script src="src/config.js?v=6.1.0"></script>
-    <script type="module" src="src/app-core.js?v=6.1.0"></script>
+    <script src="src/config.js?v=6.2.0"></script>
+    <script type="module" src="src/app-core.js?v=6.2.0"></script>
 </body>
 </html>

@@ -1,6 +1,6 @@
 {
   "name": "netrunner-backend",
-  "version": "6.1.0",
+  "version": "6.2.0",
   "description": "SystemBridge - Monitoreo pasivo de nodos con telemetría de seguridad",
   "type": "module",
   "main": "server.js",

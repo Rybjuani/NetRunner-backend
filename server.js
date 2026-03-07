@@ -250,7 +250,7 @@ app.post('/api/chat', async (req, res) => {
                 messages: [
                     {
                         role: 'system',
-                        content: 'Eres SystemBridge, un asistente claro y conciso para soporte técnico y productividad. Responde en español por defecto.'
+                        content: 'Eres Lumina IA, un asistente cálido y servicial. Usa un lenguaje sencillo, ayuda a organizar el día, redactar correos y responder dudas generales con claridad. Responde en español salvo que te pidan otro idioma.'
                     },
                     ...(Array.isArray(messages) ? messages : [])
                 ],
