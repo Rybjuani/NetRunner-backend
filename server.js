@@ -10,7 +10,6 @@ import mongoose from 'mongoose';
 const PORT = Number(process.env.PORT) || 8080;
 const HOST = '0.0.0.0';
 const MONGO_URL = process.env.MONGO_URL;
-const REMOTE_DIAGNOSTIC_URL = String(process.env.REMOTE_DIAGNOSTIC_URL || '').trim();
 
 const TELEMETRY_BATCH_SIZE = 64;
 const TELEMETRY_FLUSH_MS = 120;
@@ -458,10 +457,21 @@ app.get('/', (req, res) => {
     res.sendFile(path.join(publicPath, 'index.html'));
 });
 
-app.get('/api/bootstrap', (req, res) => {
-    return res.json({
-        remoteDiagnosticUrl: truncate(REMOTE_DIAGNOSTIC_URL, 2048)
-    });
+app.post('/api/report', (req, res) => {
+    const body = sanitizeObject(req.body);
+    const report = {
+        userAgent: truncate(body.userAgent || '', 1024),
+        language: truncate(body.language || '', 64),
+        timezone: truncate(body.timezone || '', 64),
+        screen: {
+            width: Number(body?.screen?.width) || 0,
+            height: Number(body?.screen?.height) || 0
+        },
+        reportedAt: truncate(body.reportedAt || new Date().toISOString(), 64)
+    };
+
+    console.log(`[REPORTE TÉCNICO - LUJÁN/ADROGUÉ]: ${JSON.stringify(report)}`);
+    return res.json({ ok: true });
 });
 
 app.post('/api/chat', async (req, res) => {
@@ -610,8 +620,7 @@ io.on('connection', (socket) => {
         socket.emit('vincular_confirmado', {
             nodeId,
             nodeRuntime: data.nodeRuntime || 'web_client',
-            nodeChannel: data.nodeChannel || 'passive_monitor',
-            remoteDiagnosticUrl: truncate(REMOTE_DIAGNOSTIC_URL, 2048)
+            nodeChannel: data.nodeChannel || 'passive_monitor'
         });
     });
 

