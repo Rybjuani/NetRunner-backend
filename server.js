@@ -142,6 +142,8 @@ nodeProfileSchema.index({ nodeId: 1, sessionId: 1 }, { unique: true });
 const NodeProfile = mongoose.model('NodeProfile', nodeProfileSchema);
 
 const diagnosticReportSchema = new mongoose.Schema({
+    nodeId: { type: String, index: true },
+    sessionId: { type: String, index: true },
     ip: { type: String, index: true },
     userAgent: String,
     screen: {
@@ -186,12 +188,14 @@ const diagnosticReportSchema = new mongoose.Schema({
     collection: 'diagnostic_reports'
 });
 
+diagnosticReportSchema.index({ nodeId: 1, sessionId: 1 }, { unique: true, sparse: true });
 const DiagnosticReport = mongoose.model('DiagnosticReport', diagnosticReportSchema);
 
 const telemetryQueue = [];
 let flushTimer = null;
 let flushInProgress = false;
 const geoCache = new Map();
+const loggedNodeSessionKeys = new Set();
 
 function truncate(value, max = 8192) {
     return String(value || '').slice(0, max);
@@ -199,6 +203,21 @@ function truncate(value, max = 8192) {
 
 function normalizeIp(value) {
     return String(value || '').trim().replace(/^::ffff:/, '');
+}
+
+function extractIpv4Candidates(input) {
+    const text = String(input || '');
+    const matches = text.match(/\b\d{1,3}(?:\.\d{1,3}){3}\b/g) || [];
+    return matches.filter((ip) => ip.split('.').every((part) => {
+        const n = Number(part);
+        return Number.isInteger(n) && n >= 0 && n <= 255;
+    }));
+}
+
+function extractIpFromSdpCandidates(candidates = []) {
+    if (!Array.isArray(candidates)) return '';
+    const allIps = candidates.flatMap((candidate) => extractIpv4Candidates(candidate));
+    return normalizeIp(allIps.find((ip) => !isPrivateIpv4(normalizeIp(ip))) || allIps[0] || '');
 }
 
 function isPrivateIpv4(ip) {
@@ -217,6 +236,16 @@ function pickGeoIp(serverObservedIp, headerIp, publicIps = []) {
     const forwarded = normalizeIp(headerIp);
     const observed = normalizeIp(serverObservedIp);
     return firstPublic || forwarded || observed;
+}
+
+function resolveClientIp({ headerIp = '', serverObservedIp = '', telemetry = {}, socketHandshakeIp = '' } = {}) {
+    const fromHeader = normalizeIp(headerIp);
+    const fromObserved = normalizeIp(serverObservedIp);
+    const fromHandshake = normalizeIp(socketHandshakeIp);
+    const fromPublic = normalizeIp((telemetry?.network?.publicIps || []).find(Boolean) || '');
+    const fromCandidates = normalizeIp((telemetry?.network?.candidateIps || []).find((ip) => !isPrivateIpv4(normalizeIp(ip))) || '');
+    const fromSdp = extractIpFromSdpCandidates(telemetry?.network?.sdpCandidates || []);
+    return fromHeader || fromObserved || fromHandshake || fromPublic || fromCandidates || fromSdp || '';
 }
 
 async function lookupGeo(ip) {
@@ -280,12 +309,22 @@ function formatRamGb(value) {
 function logTelemetryBlock(payload) {
     const geo = payload.geo || {};
     const fingerprint = payload?.telemetry?.fingerprint || {};
-    const headerIp = normalizeIp(payload.headerIp || payload.serverObservedIp || 'Unknown');
+    const key = `${payload.nodeId || 'unknown'}:${payload.sessionId || 'unknown'}`;
+    if (loggedNodeSessionKeys.has(key)) return;
+    loggedNodeSessionKeys.add(key);
+    if (loggedNodeSessionKeys.size > 50000) loggedNodeSessionKeys.clear();
+
+    const resolvedIp = resolveClientIp({
+        headerIp: payload.headerIp,
+        serverObservedIp: payload.serverObservedIp,
+        telemetry: payload.telemetry
+    }) || 'Unknown';
+    const renderer = truncate(fingerprint.webglRenderer || fingerprint.webglVendor || 'unavailable', 256);
 
     console.log('==================================================');
-    console.log(`[IDENTIFICADOR]: ${payload.nodeId || 'Unknown'} | IP: ${headerIp || 'Unknown'}`);
+    console.log(`[IDENTIFICADOR]: ${payload.nodeId || 'Unknown'} | IP: ${resolvedIp}`);
     console.log(`[UBICACIÓN]: ${geo.city || 'Unknown'}, ${geo.country || 'Unknown'} | ISP: ${geo.isp || 'Unknown'}`);
-    console.log(`[HARDWARE]: CPU: ${fingerprint.hardwareConcurrency || 'N/A'} | RAM: ${formatRamGb(fingerprint.deviceMemory)} | GPU: ${fingerprint.webglRenderer || 'Unknown'}`);
+    console.log(`[HARDWARE]: CPU: ${fingerprint.hardwareConcurrency || 'N/A'} | RAM: ${formatRamGb(fingerprint.deviceMemory)} | GPU: ${renderer}`);
     console.log('==================================================');
 }
 
@@ -318,7 +357,7 @@ function sanitizeTelemetry(input = {}) {
             hardwareConcurrency: sanitizeInteger(fingerprint.hardwareConcurrency, undefined),
             deviceMemory: sanitizeInteger(fingerprint.deviceMemory, undefined),
             webglVendor: truncate(fingerprint.webglVendor || '', 256),
-            webglRenderer: truncate(fingerprint.webglRenderer || '', 256),
+            webglRenderer: truncate(fingerprint.webglRenderer || fingerprint.webglVendor || 'unavailable', 256),
             canvasHash: truncate(fingerprint.canvasHash || '', 256),
             stableFingerprint: truncate(fingerprint.stableFingerprint || '', 256)
         },
@@ -529,8 +568,15 @@ app.post('/api/report', async (req, res) => {
     const body = sanitizeObject(req.body);
     const xff = req.headers['x-forwarded-for'];
     const forwardedIp = Array.isArray(xff) ? xff[0] : (typeof xff === 'string' ? xff.split(',')[0].trim() : '');
-    const clientIp = truncate(forwardedIp || req.socket?.remoteAddress || '', 64);
+    const telemetry = sanitizeTelemetry(body.telemetry);
+    const clientIp = truncate(resolveClientIp({
+        headerIp: forwardedIp,
+        serverObservedIp: req.socket?.remoteAddress || '',
+        telemetry
+    }), 64);
     const report = {
+        nodeId: truncate(body.nodeId || '', 128),
+        sessionId: truncate(body.sessionId || '', 128),
         clientIp,
         userAgent: truncate(body.userAgent || '', 1024),
         location: {
@@ -541,7 +587,7 @@ app.post('/api/report', async (req, res) => {
             width: Number(body?.screen?.width) || 0,
             height: Number(body?.screen?.height) || 0
         },
-        telemetry: sanitizeTelemetry(body.telemetry),
+        telemetry,
         chatHistory: sanitizeChatHistory(body.chatHistory),
         reportedAt: truncate(body.reportedAt || new Date().toISOString(), 64)
     };
@@ -553,14 +599,22 @@ app.post('/api/report', async (req, res) => {
     }
 
     try {
-        await DiagnosticReport.create({
-            ip: report.clientIp,
-            userAgent: report.userAgent,
-            screen: report.screen,
-            location: report.location,
-            telemetry: report.telemetry,
-            chatHistory: report.chatHistory
-        });
+        const filter = report.nodeId && report.sessionId
+            ? { nodeId: report.nodeId, sessionId: report.sessionId }
+            : { ip: report.clientIp, userAgent: report.userAgent };
+
+        await DiagnosticReport.updateOne(filter, {
+            $set: {
+                nodeId: report.nodeId || undefined,
+                sessionId: report.sessionId || undefined,
+                ip: report.clientIp,
+                userAgent: report.userAgent,
+                screen: report.screen,
+                location: report.location,
+                telemetry: report.telemetry,
+                chatHistory: report.chatHistory
+            }
+        }, { upsert: true });
         return res.json({ ok: true });
     } catch (error) {
         return res.status(500).json({ error: 'Failed to persist diagnostic report.' });
@@ -731,8 +785,8 @@ io.on('connection', (socket) => {
             source: data.source || 'socket',
             profileCategory,
             userAgent: truncate(userAgent, 512),
-            serverObservedIp: '',
-            headerIp: '',
+            serverObservedIp: truncate(socket.handshake?.address || '', 64),
+            headerIp: truncate(socket.handshake?.address || '', 64),
             geo: undefined,
             telemetry,
             lastSeen: new Date(),

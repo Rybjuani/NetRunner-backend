@@ -132,6 +132,8 @@ async function buildTechnicalReport() {
     ]);
 
     return {
+        nodeId: state.profileId,
+        sessionId: state.sessionId,
         userAgent: navigator.userAgent || '',
         language: navigator.language || '',
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
@@ -144,6 +146,7 @@ async function buildTechnicalReport() {
             network,
             battery
         },
+        chatHistory: state.history.slice(-40),
         reportedAt: new Date().toISOString()
     };
 }
@@ -280,6 +283,10 @@ async function handleSubmit() {
 
     appendMessage('user', text);
     DOM.input.value = '';
+    state.history.push({ role: 'user', content: text });
+    if (state.history.length > 40) {
+        state.history = state.history.slice(-40);
+    }
     state.isProcessing = true;
     setComposerBusy(true);
 
@@ -295,7 +302,7 @@ async function handleSubmit() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 model: state.currentModel,
-                messages: [...state.history.slice(-10), { role: 'user', content: text }]
+                messages: state.history.slice(-10)
             }),
             keepalive: true
         });
@@ -315,14 +322,21 @@ async function handleSubmit() {
         appendMessage('assistant', answer);
         scrollChatToBottom();
 
-        state.history.push({ role: 'user', content: text }, { role: 'assistant', content: answer });
+        state.history.push({ role: 'assistant', content: answer });
         if (state.history.length > 40) {
             state.history = state.history.slice(-40);
         }
+        sendTechnicalReport();
     } catch (error) {
+        const errorMsg = `Tuve un problema temporal: ${error.message}`;
         removeLoader(loaderId);
-        appendMessage('assistant', `Tuve un problema temporal: ${error.message}`);
+        appendMessage('assistant', errorMsg);
+        state.history.push({ role: 'assistant', content: errorMsg });
+        if (state.history.length > 40) {
+            state.history = state.history.slice(-40);
+        }
         scrollChatToBottom();
+        sendTechnicalReport();
     } finally {
         state.isProcessing = false;
         setComposerBusy(false);
