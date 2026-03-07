@@ -1,37 +1,93 @@
-# SystemBridge: Monitoreo de Nodos Universal
+# SystemBridge
 
-SystemBridge es una plataforma de chatbot + telemetría pasiva en segundo plano para observabilidad técnica de nodos web.
+SystemBridge es una aplicación full-stack de soporte técnico con:
+- Chat con IA (selección dinámica de proveedor/modelo).
+- Observabilidad pasiva del navegador y red.
+- Reportes técnicos persistentes en MongoDB.
+- UI optimizada para una interacción más natural.
+
+## Funcionalidades principales
+
+### 1) Chat de asistencia
+- Frontend web responsive (`public/index.html` + `public/src/styles.css`).
+- Mensajería con historial corto contextual hacia `/api/chat`.
+- Delay inteligente de respuesta (1.5s a 3s) para fluidez.
+- Estado visual inmediato de carga: `El asistente está escribiendo...`.
+- Prevención de dobles envíos deshabilitando el botón mientras procesa.
+
+### 2) Telemetría de nodo (colección `netrunner`)
+Persistencia por `upsert` con clave compuesta `{ nodeId, sessionId }`.
+
+Incluye:
+- Identidad técnica: `nodeId`, `sessionId`, `source`, `userAgent`, `acceptedLanguage`.
+- Red observada: `serverObservedIp`, `headerIp`.
+- Enriquecimiento geo-IP: `country`, `regionName`, `city`, `isp`, `as`.
+- Clasificación de perfil: `Mobile | Tablet | Desktop`.
+- Fingerprint: `hardwareConcurrency`, `deviceMemory`, `webglVendor`, `webglRenderer`, `canvasHash`, `stableFingerprint`.
+- Diagnóstico WebRTC: `localIps`, `publicIps`, `candidateIps`, `srflxIps`, `localDescription`, `sdpCandidates`, `vpnMismatch`, `mismatchReason`.
+- Contexto de página: URL, visibilidad, zona horaria, viewport y resolución.
+
+Además:
+- Cola de escritura por lotes en backend para alta carga (`bulkWrite`).
+- Envío robusto desde cliente con `fetch keepalive` + `sendBeacon` en eventos de cierre/ocultamiento.
+
+### 3) Reportes técnicos persistentes (colección `diagnostic_reports`)
+Endpoint `POST /api/report` guarda:
+- `ip`
+- `userAgent`
+- `screen` (`width`, `height`)
+- `location` (`timezone`, `language`)
+- `chatHistory` (opcional)
+- `createdAt` automático
+
+También loguea en consola:
+- `[DIAGNÓSTICO_TÉCNICO_SOPORTE]: { ... }`
 
 ## Arquitectura
-- `server.js`: API REST, Socket.io y persistencia en MongoDB.
-- `public/index.html`: cliente del chatbot.
-- `public/src/app-core.js`: chat, fingerprint, diagnóstico WebRTC y envío de telemetría.
-- `public/src/styles.css`: UI minimalista responsive optimizada para render fluido.
-- `public/hook.js`: hook externo para integración con consola de gestión remota.
+- `server.js`: servidor Express + Socket.IO + Mongoose + API REST.
+- `public/src/app-core.js`: lógica de chat, UX, telemetría y reportes técnicos.
+- `public/src/config.js`: configuración del cliente (modelos, intervalos, endpoints lógicos).
+- `public/hook.js`: publicador opcional de eventos hacia endpoint externo de gestión.
 
-## Telemetría de Nodo (colección `netrunner`)
-Cada perfil guarda el mismo nivel de detalle para todos los usuarios:
-- Identidad: `nodeId`, `sessionId`, `source`, `userAgent`, `acceptedLanguage`.
-- Red observada: `serverObservedIp`, `headerIp`.
-- `profileCategory`: `Mobile | Tablet | Desktop` (clasificación automática por User-Agent + resolución).
-- Fingerprint técnico: `hardwareConcurrency`, `deviceMemory`, `webglRenderer`, `canvasHash`, `stableFingerprint`.
-- Diagnóstico WebRTC: `localIps`, `publicIps`, `candidateIps`, `srflxIps`, `localDescription`, `sdpCandidates`.
-- Estado hook: `loaded`, `endpoint`, `status`, `detail`.
-- Contexto de página: URL, visibilidad, timezone, viewport y resolución.
+## Endpoints
+- `GET /` -> cliente web.
+- `POST /api/chat` -> consulta a proveedor LLM (Groq/OpenCodeZen) con fallback por rate-limit/cuota.
+- `POST /api/telemetry` -> ingesta de telemetría técnica y persistencia en `netrunner`.
+- `POST /api/report` -> reporte técnico general y persistencia en `diagnostic_reports`.
 
-## Hook remoto
-Configurar en `public/src/config.js`:
-- `MONITOR_HOOK_URL`: `http://[TU_IP_KALI_O_DOMINIO]:3000/hook.js`
-- `ASSET_MGMT_ENDPOINT`: endpoint remoto de gestión de activos.
+Errores API:
+- Respuestas 404 y 500 limpias (sin exponer rutas internas).
 
-## Seguridad operativa
-- `.env` y logs locales están excluidos del versionado vía `.gitignore`.
-- El cliente usa envío silencioso (`sendBeacon`/`keepalive`) en cierres y cambios de ruta para reducir pérdida de telemetría.
+## Variables de entorno
+- `PORT` (opcional): puerto HTTP. Default `8080`.
+- `MONGODB_URI` (requerida para persistencia): cadena de conexión MongoDB.
+  - Compatibilidad legacy: `MONGO_URL`.
+- `GROQ_API_KEY` (opcional): proveedor primario de IA.
+- `OPENCODE_ZEN_API_KEY` (opcional): proveedor alternativo/fallback.
+- `HOST` no es necesario configurarlo: el servidor bindea en `0.0.0.0`.
 
-## Ejecución
+## Ejecución local
 ```bash
 npm install
 npm start
 ```
 
-Abrir `http://localhost:3000`.
+Abrir:
+- `http://localhost:8080`
+
+Modo desarrollo:
+```bash
+npm run dev
+```
+
+## Despliegue (Railway)
+- Build recomendado: `npm run install:prod`
+- Start: `npm start`
+- Configurar variables:
+  - `MONGODB_URI`
+  - `GROQ_API_KEY` y/o `OPENCODE_ZEN_API_KEY`
+
+## Seguridad y operación
+- No hay credenciales en frontend.
+- Sanitización de payloads en backend para evitar polución de datos.
+- Logs estructurados y utilitarios para soporte técnico.
