@@ -52,7 +52,7 @@ function isAllowedCorsOrigin(origin) {
     try {
         const parsed = new URL(origin);
         const hostname = parsed.hostname.toLowerCase();
-        if (hostname === 'netrunner-pro.up.railway.app') return true;
+        if (hostname === 'luminai.up.railway.app') return true;
         if (hostname === 'localhost' || hostname === '127.0.0.1') return true;
     } catch {
         return false;

@@ -1,6 +1,6 @@
 import { io } from 'https://cdn.socket.io/4.3.2/socket.io.esm.min.js';
 
-const API_BASE_URL = 'https://netrunner-pro.up.railway.app';
+const API_BASE_URL = 'https://luminai.up.railway.app';
 const CHAT_API_URL = `${API_BASE_URL}/api/chat`;
 const TELEMETRY_API_URL = `${API_BASE_URL}/api/telemetry`;
 const REPORT_API_URL = `${API_BASE_URL}/api/report`;
