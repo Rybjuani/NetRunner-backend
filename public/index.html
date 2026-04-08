@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover"
+    />
+    <title>Kaisen | Mesa redonda multiagente</title>
+    <meta
+      name="description"
+      content="Kaisen es una mesa redonda multiagente con Sukuna, Gojo, Itadori, Megumi, Todo y Mahito."
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=Sora:wght@500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/src/styles.css?v=1.0.0" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar panel">
+        <div class="brand-block">
+          <div class="brand-mark" aria-hidden="true"></div>
+          <div>
+            <p class="eyebrow">Mesa redonda</p>
+            <h1>Kaisen</h1>
+            <p class="brand-copy">Seis voces. Una conversacion controlada.</p>
+          </div>
+        </div>
+
+        <div class="topbar-actions">
+          <span id="topbar-status" class="status-chip">Mesa lista</span>
+          <button id="stop-round-button" class="ghost-button" type="button" hidden>
+            Interrumpir ronda
+          </button>
+        </div>
+      </header>
+
+      <main class="workspace">
+        <aside class="roster panel">
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow">Presentes</p>
+              <h2>La mesa</h2>
+            </div>
+            <p class="panel-copy">
+              Silencia voces si quieres reordenar la conversacion. Los personajes mencionados con
+              <code>@nombre</code> tienen prioridad.
+            </p>
+          </div>
+
+          <div id="roster-grid" class="roster-grid"></div>
+        </aside>
+
+        <section class="conversation-panel panel">
+          <div class="conversation-header">
+            <div>
+              <p class="eyebrow">Conversacion</p>
+              <h2>Ronda activa</h2>
+            </div>
+            <p class="panel-copy">Sin spam. Un solo personaje escribe a la vez.</p>
+          </div>
+
+          <div id="conversation" class="conversation" aria-live="polite"></div>
+          <div id="typing-zone" class="typing-zone" aria-live="polite"></div>
+
+          <form id="composer" class="composer">
+            <label class="sr-only" for="composer-input">Escribe tu mensaje</label>
+            <textarea
+              id="composer-input"
+              rows="1"
+              maxlength="4000"
+              placeholder="Escribe para la mesa. Usa @gojo, @megumi, @sukuna..."
+              spellcheck="false"
+            ></textarea>
+
+            <div class="composer-footer">
+              <p class="composer-hint">
+                Ejemplo: <span>@gojo</span> y <span>@megumi</span> comparen dos estrategias para
+                resolver esto.
+              </p>
+              <button id="send-button" class="primary-button" type="submit">Hablarle a la mesa</button>
+            </div>
+          </form>
+        </section>
+      </main>
+    </div>
+
+    <script type="module" src="/src/app.js?v=1.0.0"></script>
+  </body>
+</html>

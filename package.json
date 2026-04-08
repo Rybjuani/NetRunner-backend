@@ -1,0 +1,31 @@
+{
+  "name": "kaisen",
+  "version": "1.0.0",
+  "description": "Kaisen - chatbot multiagente tipo mesa redonda inspirado en Jujutsu Kaisen",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "install:prod": "npm ci --omit=dev",
+    "postinstall": "npm prune --omit=dev"
+  },
+  "keywords": [
+    "kaisen",
+    "chatbot",
+    "multi-agent",
+    "groq",
+    "ollama",
+    "roundtable"
+  ],
+  "author": "Rybjuani",
+  "license": "MIT",
+  "dependencies": {
+    "dotenv": "^16.4.0",
+    "express": "^4.21.2"
+  },
+  "engines": {
+    "node": ">=18.18.0",
+    "npm": ">=9.0.0"
+  }
+}
