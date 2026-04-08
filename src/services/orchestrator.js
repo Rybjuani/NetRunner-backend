@@ -134,10 +134,54 @@ function countKeywordHits(text, keywords) {
   return keywords.reduce((count, keyword) => (lowered.includes(keyword) ? count + 1 : count), 0);
 }
 
+function getRelationshipRule(characterId, targetId) {
+  const character = typeof characterId === "string" ? getCharacter(characterId) : characterId;
+  if (!character || !targetId) return null;
+  return character.relationships?.[targetId] || null;
+}
+
+function calculatePairHeat(leftId, rightId) {
+  if (!leftId || !rightId || leftId === rightId) return 0;
+
+  const leftRule = getRelationshipRule(leftId, rightId);
+  const rightRule = getRelationshipRule(rightId, leftId);
+
+  return (
+    (leftRule?.replyBias || 0) +
+    (leftRule?.provokeBias || 0) +
+    (leftRule?.interruptBias || 0) +
+    (rightRule?.replyBias || 0) +
+    (rightRule?.provokeBias || 0) +
+    (rightRule?.interruptBias || 0)
+  );
+}
+
+function buildRequestedPairTension(requestedIds) {
+  let hottestPair = null;
+  let hottestPairHeat = 0;
+
+  for (let index = 0; index < requestedIds.length; index += 1) {
+    for (let offset = index + 1; offset < requestedIds.length; offset += 1) {
+      const pair = [requestedIds[index], requestedIds[offset]];
+      const heat = calculatePairHeat(pair[0], pair[1]);
+      if (heat > hottestPairHeat) {
+        hottestPairHeat = heat;
+        hottestPair = pair;
+      }
+    }
+  }
+
+  return {
+    hottestPair,
+    hottestPairHeat,
+  };
+}
+
 function buildSceneContext(text, references, history, randomness = 1) {
   const lowered = text.toLowerCase();
   const wordCount = countWords(text);
   const recentAgents = recentAgentTurns(history);
+  const requestedPairTension = buildRequestedPairTension(references.all);
 
   return {
     text,
@@ -161,6 +205,10 @@ function buildSceneContext(text, references, history, randomness = 1) {
     silenceCallout: /callad|silencio|mudos|despierten|apagados/i.test(text),
     comparison: references.all.length >= 2 || /ganaria|vs\b|versus|mejor|pelea/i.test(text),
     shortPing: wordCount <= 8,
+    hottestPair: requestedPairTension.hottestPair,
+    hottestPairHeat: requestedPairTension.hottestPairHeat,
+    elevatedCrossTalk:
+      requestedPairTension.hottestPairHeat >= 70 || references.all.length >= 2 || includesSignal(lowered, SIGNAL_GROUPS.debate),
     recentAgents,
     lastHistorySpeakerId: recentAgents.at(-1)?.speakerId || null,
     randomness,
@@ -198,13 +246,22 @@ function determineRoundPlan(context, availableCount) {
     desiredSteps = Math.max(desiredSteps, 2);
   }
 
+  if (context.hottestPairHeat >= 70 || (context.elevatedCrossTalk && context.wordCount > 10)) {
+    desiredSteps = Math.max(desiredSteps, Math.min(hardCap, 4));
+  }
+
   desiredSteps = Math.max(minSteps, Math.min(desiredSteps, hardCap));
 
   return {
     minSteps,
     desiredSteps,
     hardCap: Math.max(1, Math.min(runtime.chat.maxRoundTurns, hardCap)),
-    allowReentry: context.debate || context.directReferenceCount >= 2 || context.wordCount > 22 || context.comparison,
+    allowReentry:
+      context.debate ||
+      context.directReferenceCount >= 2 ||
+      context.wordCount > 22 ||
+      context.comparison ||
+      context.hottestPairHeat >= 60,
   };
 }
 
@@ -227,6 +284,7 @@ function baseContextBoost(character, context) {
   if (context.chaotic && ["sukuna", "mahito", "todo"].includes(character.id)) score += 18;
   if (context.humorous && ["gojo", "todo", "mahito"].includes(character.id)) score += 12;
   if (context.silenceCallout && ["gojo", "todo", "mahito", "itadori"].includes(character.id)) score += 14;
+  if (context.hottestPair?.includes(character.id)) score += 18;
 
   return score;
 }
@@ -253,15 +311,29 @@ function extractNamedCharactersFromText(text) {
   return extractCharacterReferences(text).all;
 }
 
-function scoreRelationship(character, previousSpeakerId, namesInLastEntry) {
+function scoreRelationship(character, previousSpeakerId, lastEntry, namesInLastEntry, context) {
   if (!previousSpeakerId || previousSpeakerId === character.id) return 0;
 
+  const directRule = getRelationshipRule(character, previousSpeakerId);
+  const reverseRule = getRelationshipRule(previousSpeakerId, character.id);
   let score = 0;
   if (character.dynamics.provokes.includes(previousSpeakerId)) score += 28;
   if (character.dynamics.backsUp.includes(previousSpeakerId)) score += 16;
   if (character.dynamics.clashesWith.includes(previousSpeakerId)) score += 22;
   if (character.dynamics.baitedBy.includes(previousSpeakerId)) score += 18;
-  if (namesInLastEntry.includes(character.id)) score += 26;
+  score += directRule?.replyBias || 0;
+  score += Math.round((directRule?.provokeBias || 0) * 0.75);
+  score += Math.round((reverseRule?.provokeBias || 0) * 0.42);
+
+  if (namesInLastEntry.includes(character.id)) {
+    score += directRule?.namedReplyBias || reverseRule?.namedReplyBias || 26;
+  }
+  if (lastEntry?.replyToAgentId === character.id) {
+    score += directRule?.interruptBias || reverseRule?.interruptBias || 24;
+  }
+  if (context.hottestPair?.includes(character.id) && context.hottestPair?.includes(previousSpeakerId)) {
+    score += 20;
+  }
 
   return score;
 }
@@ -275,14 +347,18 @@ function scoreFollowUpSpeaker({ character, context, roundEntries, history, plan 
 
   let score = 12 + baseContextBoost(character, context);
   score += character.followUpBias * 18;
-  score += scoreRelationship(character, previousSpeakerId, namesInLastEntry);
+  score += scoreRelationship(character, previousSpeakerId, lastEntry, namesInLastEntry, context);
 
   if (roundOccurrences === 0) score += 14;
   if (context.requestedIds.includes(character.id) && roundOccurrences === 0) score += 34;
   if (plan.allowReentry && roundOccurrences === 1 && character.id === firstSpeakerId && roundEntries.length >= 2) {
     score += character.reentryBias * 22;
+    if (context.hottestPair?.includes(character.id)) {
+      score += 12;
+    }
   }
   if (context.comparison && context.secondaryId === character.id && roundOccurrences === 0) score += 16;
+  if (context.hottestPair?.includes(character.id) && roundOccurrences === 0) score += 14;
 
   if (roundOccurrences >= runtime.chat.naturalRound.maxSpeakerEntriesPerRound) {
     score -= 120;
@@ -302,7 +378,9 @@ function scoreClosingSpeaker({ character, context, roundEntries, history, plan }
   score += character.closerBias * 22;
 
   const previousSpeakerId = roundEntries.at(-1)?.speakerId || null;
+  const directRule = previousSpeakerId ? getRelationshipRule(character, previousSpeakerId) : null;
   if (previousSpeakerId && character.dynamics.closesBestAgainst.includes(previousSpeakerId)) score += 18;
+  score += directRule?.closeBias || 0;
   if (["itadori", "megumi", "gojo"].includes(character.id)) score += 8;
   if (context.debate && ["gojo", "sukuna", "mahito"].includes(character.id)) score += 8;
 
@@ -325,6 +403,7 @@ function determinePurpose({ roundEntries, context, plan }) {
   if (roundEntries.length === 0) return "open";
   if (roundEntries.length + 1 >= plan.desiredSteps) return "close";
   if (context.debate || context.directReferenceCount >= 2 || context.comparison) return "react";
+  if (context.hottestPairHeat >= 70 && roundEntries.length < plan.desiredSteps) return "react";
   if (roundEntries.length === 1 && !context.solo && (context.groupAsked || context.wordCount > 18)) return "react";
   return "close";
 }
@@ -462,10 +541,19 @@ function shouldStopRound({ context, plan, roundEntries, nextCandidateScore, fail
 
   if (context.solo && roundEntries.length >= 1) return true;
   if (context.shortPing && context.directReferenceCount <= 1 && roundEntries.length >= 1) return true;
-  if (!context.debate && !context.comparison && coveredReferences && roundEntries.length >= 2 && nextCandidateScore < 88) {
+  if (
+    !context.debate &&
+    !context.comparison &&
+    context.hottestPairHeat < 70 &&
+    coveredReferences &&
+    roundEntries.length >= 2 &&
+    nextCandidateScore < 88
+  ) {
     return true;
   }
-  if (coveredReferences && roundEntries.length >= 3 && nextCandidateScore < 100) return true;
+  if (coveredReferences && roundEntries.length >= 3 && nextCandidateScore < (context.hottestPairHeat >= 70 ? 122 : 100)) {
+    return true;
+  }
   if (!coveredReferences && roundEntries.length >= plan.desiredSteps - 1 && nextCandidateScore < 112) return true;
 
   return false;
@@ -523,6 +611,7 @@ function planRound({ text, history, silencedAgents, randomize = true }) {
     roundEntries.push({
       role: "agent",
       speakerId: candidate.character.id,
+      replyToAgentId: candidate.replyToAgentId,
       text: buildPreviewEntry(candidate.character.id, candidate.replyToAgentId),
     });
 
@@ -638,6 +727,7 @@ export async function createRoundtableConversation({ text, history, silencedAgen
       roundEntries.push({
         role: "agent",
         speakerId: character.id,
+        replyToAgentId: stepPreview.replyToAgentId,
         text: cleanedText,
       });
     } catch (error) {
