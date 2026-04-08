@@ -47,6 +47,19 @@ const PROVOCATION_PATTERNS = [
   /\balma/i,
   /\bmoral/i,
 ];
+const DIRECT_ADDRESS_PREFIXES = new Set(["", "oye", "hey", "eh", "mira", "a ver", "hola", "buenas"]);
+const THIRD_PERSON_REPORTING_PATTERNS = [
+  /^\s+(?:dijo|dice|diria|diría|comento|comentó|conto|contó|opina|opino|opinó|piensa|cree|creia|creía|haria|haría|hizo|hace)\b/i,
+];
+const DIRECT_ADDRESS_AFTER_ALIAS_PATTERNS = [
+  /^\s*[,:\-!?]/i,
+  /^\s+(?:contesta(?:me)?|contestame|responde(?:me)?|respondeme|decime|dime|explicale|explica|ayudame|ayúdame|mirame|mírame|escucha|calla(?:te)?|como|cómo|por|por qué|porque|te|vos|estas|estás|sigues|segu[ií]s|quiero|necesito|podrias|podrías|no)\b/i,
+];
+const FOCUS_CONTINUATION_PATTERNS = [
+  /^\s*[¿?]?\s*(?:y\s+)?por\s+qu[eé]\s*[?!.]*$/i,
+  /^\s*[¿?]?\s*(?:y\s+eso|como\s+asi|cómo\s+así|como|cómo|y\s+entonces|entonces)\s*[?!.]*$/i,
+  /^\s*[¿?]?\s*(?:por\s+eso|asi\s+que|as[ií]\s+que)\s*[?!.]*$/i,
+];
 
 const CHARACTER_REFERENCE_PATTERNS = CHARACTERS.map((character) => ({
   characterId: character.id,
@@ -104,44 +117,178 @@ function extractCharacterReferences(text) {
   const explicitMatches = [...lowered.matchAll(/@([a-z0-9_-]+)/g)].map((match) => ({
     alias: match[1],
     index: match.index ?? 0,
+    matchedText: match[0],
   }));
   const explicit = [];
   const natural = [];
   const mentionPositions = new Map();
+  const matchMap = new Map();
 
   for (const referenceConfig of CHARACTER_REFERENCE_PATTERNS) {
     const explicitHit = explicitMatches.find((match) => referenceConfig.explicitAliases.includes(match.alias));
     if (explicitHit) {
       explicit.push(referenceConfig.characterId);
       mentionPositions.set(referenceConfig.characterId, explicitHit.index);
+      matchMap.set(referenceConfig.characterId, {
+        characterId: referenceConfig.characterId,
+        index: explicitHit.index,
+        matchedText: explicitHit.matchedText,
+        kind: "explicit",
+      });
       continue;
     }
 
     let earliestIndex = Infinity;
+    let earliestMatchText = "";
     for (const alias of referenceConfig.naturalAliases) {
       const pattern = new RegExp(`\\b${escapeRegExp(alias).replace(/\\ /g, "\\s+")}\\b`, "ig");
       const match = pattern.exec(text);
       if (match && typeof match.index === "number") {
         earliestIndex = Math.min(earliestIndex, match.index);
+        if (!earliestMatchText || match.index === earliestIndex) {
+          earliestMatchText = match[0];
+        }
       }
     }
 
     if (earliestIndex !== Infinity) {
       natural.push(referenceConfig.characterId);
       mentionPositions.set(referenceConfig.characterId, earliestIndex);
+      matchMap.set(referenceConfig.characterId, {
+        characterId: referenceConfig.characterId,
+        index: earliestIndex,
+        matchedText: earliestMatchText || referenceConfig.characterId,
+        kind: "natural",
+      });
     }
   }
 
   const all = [...new Set([...explicit, ...natural])];
   const ordered = [...all].sort((left, right) => (mentionPositions.get(left) ?? 99999) - (mentionPositions.get(right) ?? 99999));
+  const matches = [...matchMap.values()].sort((left, right) => left.index - right.index);
 
   return {
     explicit,
     natural: natural.filter((id) => !explicit.includes(id)),
     all,
     ordered,
+    matches,
     mentionPositions,
   };
+}
+
+function normalizeVocativePrefix(prefix) {
+  return String(prefix || "")
+    .trim()
+    .replace(/[,:.!?\-]+$/g, "")
+    .trim()
+    .toLowerCase();
+}
+
+function detectDirectTargetSpeaker(text, references) {
+  const firstMatch = references.matches?.[0];
+  if (!firstMatch) return null;
+
+  const prefix = normalizeVocativePrefix(String(text || "").slice(0, firstMatch.index));
+  if (!DIRECT_ADDRESS_PREFIXES.has(prefix)) {
+    return null;
+  }
+
+  const after = String(text || "").slice(firstMatch.index + firstMatch.matchedText.length);
+  if (THIRD_PERSON_REPORTING_PATTERNS.some((pattern) => pattern.test(after))) {
+    return null;
+  }
+
+  if (DIRECT_ADDRESS_AFTER_ALIAS_PATTERNS.some((pattern) => pattern.test(after))) {
+    return {
+      characterId: firstMatch.characterId,
+      reason: "direct_address",
+    };
+  }
+
+  if (references.all.length === 1 && /^\s*[?!.]*\s*$/.test(after)) {
+    return {
+      characterId: firstMatch.characterId,
+      reason: "direct_address",
+    };
+  }
+
+  return null;
+}
+
+function getLastInteraction(history) {
+  const lastUserIndex = [...history]
+    .map((entry, index) => ({ entry, index }))
+    .reverse()
+    .find((item) => item.entry.role === "user")?.index;
+
+  if (typeof lastUserIndex !== "number") {
+    return null;
+  }
+
+  const userEntry = history[lastUserIndex];
+  const agentEntries = history.slice(lastUserIndex + 1).filter((entry) => entry.role === "agent");
+  const userReferences = extractCharacterReferences(userEntry.text);
+  const directTarget = detectDirectTargetSpeaker(userEntry.text, userReferences);
+  const primaryResponderId = agentEntries[0]?.speakerId || null;
+
+  return {
+    userEntry,
+    agentEntries,
+    userReferences,
+    directTargetSpeakerId: directTarget?.characterId || null,
+    primaryResponderId,
+    currentFocusId: directTarget?.characterId || primaryResponderId || null,
+  };
+}
+
+function isFocusContinuationMessage(text, references) {
+  const trimmed = String(text || "").trim();
+  if (!trimmed || references.all.length > 0) {
+    return false;
+  }
+
+  if (FOCUS_CONTINUATION_PATTERNS.some((pattern) => pattern.test(trimmed))) {
+    return true;
+  }
+
+  const wordCount = countWords(trimmed);
+  if (wordCount > 5) {
+    return false;
+  }
+
+  return /^(?:y\s+)?(?:por|porque|por qué|como|cómo|eso|entonces|asi|así)\b/i.test(trimmed);
+}
+
+function deriveFocusState(history) {
+  const lastInteraction = getLastInteraction(history);
+  if (!lastInteraction?.currentFocusId) {
+    return null;
+  }
+
+  return {
+    lastTargetSpeakerId: lastInteraction.directTargetSpeakerId,
+    lastPrimaryResponderId: lastInteraction.primaryResponderId,
+    currentFocusId: lastInteraction.currentFocusId,
+    focusTTL: 1,
+  };
+}
+
+function detectTargetSpeaker({ text, references, history }) {
+  const directTarget = detectDirectTargetSpeaker(text, references);
+  if (directTarget) {
+    return directTarget;
+  }
+
+  const focusState = deriveFocusState(history);
+  if (focusState?.currentFocusId && isFocusContinuationMessage(text, references)) {
+    return {
+      characterId: focusState.currentFocusId,
+      reason: "focus_continuation",
+    };
+  }
+
+  return null;
 }
 
 function recentAgentTurns(history) {
@@ -218,19 +365,26 @@ function buildSceneContext(text, references, history, randomness = 1) {
   const lowered = text.toLowerCase();
   const wordCount = countWords(text);
   const recentAgents = recentAgentTurns(history);
-  const requestedPairTension = buildRequestedPairTension(references.all);
+  const focusState = deriveFocusState(history);
+  const targetSpeaker = detectTargetSpeaker({ text, references, history });
+  const requestedIds = [...new Set([...(targetSpeaker?.characterId ? [targetSpeaker.characterId] : []), ...references.all])];
+  const requestedPairTension = buildRequestedPairTension(requestedIds);
 
   return {
     text,
     lowered,
     wordCount,
     references,
-    requestedIds: references.all,
+    requestedIds,
+    mentionedIds: references.all,
     explicitIds: references.explicit,
     naturalIds: references.natural,
     orderedIds: references.ordered,
     primaryId: references.ordered[0] || null,
     secondaryId: references.ordered[1] || null,
+    targetSpeakerId: targetSpeaker?.characterId || null,
+    targetReason: targetSpeaker?.reason || null,
+    focusState,
     directReferenceCount: references.all.length,
     solo: includesSignal(lowered, SIGNAL_GROUPS.solo),
     debate: includesSignal(lowered, SIGNAL_GROUPS.debate),
@@ -245,7 +399,7 @@ function buildSceneContext(text, references, history, randomness = 1) {
     hottestPair: requestedPairTension.hottestPair,
     hottestPairHeat: requestedPairTension.hottestPairHeat,
     elevatedCrossTalk:
-      requestedPairTension.hottestPairHeat >= 70 || references.all.length >= 2 || includesSignal(lowered, SIGNAL_GROUPS.debate),
+      requestedPairTension.hottestPairHeat >= 70 || requestedIds.length >= 2 || includesSignal(lowered, SIGNAL_GROUPS.debate),
     recentAgents,
     lastHistorySpeakerId: recentAgents.at(-1)?.speakerId || null,
     randomness,
@@ -258,7 +412,10 @@ function determineRoundPlan(context, availableCount) {
   let minSteps = runtime.chat.naturalRound.minMessages;
   let desiredSteps = 2;
 
-  if (context.solo && context.directReferenceCount <= 1) {
+  if (context.targetSpeakerId && context.directReferenceCount <= 1 && !context.groupAsked && !context.comparison && !context.debate) {
+    minSteps = 1;
+    desiredSteps = 1;
+  } else if (context.solo && context.directReferenceCount <= 1) {
     desiredSteps = 1;
   } else if (context.groupAsked && context.directReferenceCount === 0) {
     minSteps = 2;
@@ -281,6 +438,10 @@ function determineRoundPlan(context, availableCount) {
   if (context.silenceCallout && context.directReferenceCount === 0) {
     minSteps = Math.max(minSteps, 2);
     desiredSteps = Math.max(desiredSteps, 2);
+  }
+
+  if (context.targetSpeakerId && context.directReferenceCount >= 2) {
+    desiredSteps = Math.max(desiredSteps, Math.min(hardCap, context.hottestPairHeat >= 70 ? 4 : 3));
   }
 
   if (context.hottestPairHeat >= 70 || (context.elevatedCrossTalk && context.wordCount > 10)) {
@@ -335,6 +496,8 @@ function scoreOpeningSpeaker({ character, context, history }) {
   score += character.openingBias * 22;
   score -= recentOccurrences * 30;
 
+  if (context.targetSpeakerId === character.id) score += 260;
+  if (context.targetSpeakerId && character.id !== context.targetSpeakerId) score -= 220;
   if (lastSpeaker === character.id) score -= 42;
   if (context.solo && context.requestedIds.includes(character.id)) score += 34;
   if (context.groupAsked && ["gojo", "itadori", "todo"].includes(character.id)) score += 10;
@@ -470,6 +633,21 @@ function determinePurpose({ roundEntries, context, plan }) {
 }
 
 function pickNextSpeaker({ availableCharacters, blockedIds, context, history, roundEntries, plan }) {
+  if (roundEntries.length === 0 && context.targetSpeakerId) {
+    const targetCharacter = availableCharacters.find(
+      (character) => character.id === context.targetSpeakerId && !blockedIds.has(character.id),
+    );
+
+    if (targetCharacter) {
+      return {
+        character: targetCharacter,
+        score: 9999,
+        purpose: "open",
+        replyToAgentId: null,
+      };
+    }
+  }
+
   const purpose = determinePurpose({ roundEntries, context, plan });
   const selection = chooseSpeaker({
     availableCharacters,
@@ -760,7 +938,16 @@ export async function createRoundtableConversation({ text, history, silencedAgen
         history,
         roundEntries,
         userText: text,
-        references: planned.context.requestedIds,
+        references: planned.context.mentionedIds,
+        targetSpeakerId: planned.context.targetSpeakerId,
+        targetReason: planned.context.targetReason,
+        responseRole: planned.context.targetSpeakerId
+          ? steps.length === 0 && character.id === planned.context.targetSpeakerId
+            ? "target_owner"
+            : character.id === planned.context.targetSpeakerId
+              ? "target_focus"
+              : "secondary"
+          : "group",
         turnIndex: steps.length,
         purpose: stepPreview.purpose,
         replyToAgentId: stepPreview.replyToAgentId,
@@ -775,6 +962,11 @@ export async function createRoundtableConversation({ text, history, silencedAgen
 
       const cleanedText = cleanAgentText(response.text, character);
       if (!cleanedText) {
+        if (steps.length === 0 && planned.context.targetSpeakerId === character.id) {
+          const error = new Error("El personaje al que le hablaste no pudo responder primero.");
+          error.statusCode = 503;
+          throw error;
+        }
         blockedIds.add(character.id);
         failures += 1;
         continue;
@@ -804,6 +996,10 @@ export async function createRoundtableConversation({ text, history, silencedAgen
         text: cleanedText,
       });
     } catch (error) {
+      if (steps.length === 0 && planned.context.targetSpeakerId === character.id) {
+        throw error;
+      }
+
       blockedIds.add(character.id);
       failures += 1;
 

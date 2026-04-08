@@ -134,12 +134,16 @@ export function buildAgentMessages({
   roundEntries,
   userText,
   references,
+  targetSpeakerId,
+  targetReason,
+  responseRole,
   turnIndex,
   purpose,
   replyToAgentId,
   alreadySpoke,
   roundPlan,
 }) {
+  const targetSpeaker = targetSpeakerId ? getCharacterById(targetSpeakerId) : null;
   const referencedNames = references.length
     ? references.map((id) => getCharacterById(id)?.name || id).join(", ")
     : "ninguno";
@@ -155,6 +159,26 @@ export function buildAgentMessages({
   const referencePressure = buildReferencePressure(character, references);
   const pairDirective = buildPairDirective(character, replyToAgentId);
   const immediateReactionCue = buildImmediateReactionCue(character, lastRoundEntry, replyToAgentId);
+  const ownershipLines =
+    responseRole === "target_owner"
+      ? [
+          `El usuario te hablo a vos${targetReason === "focus_continuation" ? " y el foco viene del turno anterior" : ""}.`,
+          "Sos el encargado de responder directamente y primero.",
+          "Responde como destinatario principal con naturalidad, no como comentarista lateral.",
+        ]
+      : responseRole === "target_focus"
+        ? [
+            "Sigues siendo el foco principal de esta mini escena.",
+            "Si vuelves a entrar, debe sentirse como aclaracion, correccion o remate de tu propia respuesta principal.",
+          ]
+        : responseRole === "secondary" && targetSpeaker
+          ? [
+              `El usuario no te hablo a vos. Le hablo a ${targetSpeaker.name}.`,
+              `${targetSpeaker.name} es el destinatario principal y ya debe haber dado la respuesta base antes de que entres.`,
+              "No robes la respuesta principal ni contestes como si la pregunta fuera para vos.",
+              "Solo puedes comentar, provocar, contradecir, burlarte, respaldar o rematar despues de esa respuesta principal.",
+            ]
+          : ["No hay un destinatario unico: entra como parte de una conversacion grupal."];
 
   const guidanceByPurpose = {
     open: "Entra con una linea fuerte y clara. No expliques de mas.",
@@ -170,6 +194,7 @@ export function buildAgentMessages({
     `Interlocutor actual: ${character.name}.`,
     promptContext,
     `Referencias detectadas del usuario: ${referencedNames}.`,
+    ...ownershipLines,
     `Turno dentro de esta interaccion: ${turnIndex + 1}.`,
     `Tipo de intervencion esperada: ${purpose}.`,
     `Objetivo de longitud: entre ${character.minWords} y ${character.maxWords} palabras y como maximo ${character.maxSentences} frases.`,
@@ -202,6 +227,11 @@ export function buildAgentMessages({
     "Instrucciones de salida:",
     `- ${guidanceByPurpose[purpose]}`,
     "- Habla como este personaje, no como un asistente.",
+    responseRole === "target_owner"
+      ? "- Responde la pregunta o comentario del usuario de frente; esa respuesta te pertenece a ti."
+      : responseRole === "secondary"
+        ? "- No respondas como destinatario principal. Tu trabajo es reaccionar despues, no contestar por el otro."
+        : "- Entra de forma natural segun tu rol en la escena.",
     "- Si reaccionas a otro personaje, la primera frase debe tocar lo que acaba de decir o insinuar y sonar a contestacion real.",
     "- Si respondes a otro personaje, hablale a esa persona; no expliques desde fuera lo que piensas de ella.",
     "- No abras con marco general, resumen ni contextualizacion blanda.",
