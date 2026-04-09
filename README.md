@@ -5,9 +5,12 @@ Kaisen es una app de chat multiagente tipo mesa redonda inspirada en Jujutsu Kai
 ## Principios del proyecto
 
 - Conversacion grupal primero, no asistente individual.
+- Si el usuario le habla a un personaje concreto, ese personaje responde primero.
+- Los demas pueden intervenir despues, pero no robar la respuesta principal.
 - Una sola voz escribiendo a la vez.
 - 1 a 3 respuestas por turno de usuario, salvo que el prompt fuerce otra dinamica.
 - Personalidades marcadas y consistentes por personaje.
+- Salida y superficie de producto en español.
 - Sin telemetria, sin fingerprinting, sin MongoDB, sin recoleccion pasiva.
 - Backend minimo, deployable en Railway.
 
@@ -18,6 +21,8 @@ Kaisen es una app de chat multiagente tipo mesa redonda inspirada en Jujutsu Kai
 - Fallback chain entre `Groq`, `Ollama` y `OpenCode Zen`.
 - Avatares locales listos en `public/avatars/`.
 - Persistencia backend eliminada por completo.
+- Ownership conversacional: foco por nombre, alias o continuidad corta.
+- Errores API y estados visibles localizados en español.
 
 ## Stack
 
@@ -82,6 +87,12 @@ Health:
 
 - `GET http://localhost:8080/api/health`
 
+Smoke local de orquestacion:
+
+```bash
+npm run test:smoke
+```
+
 ## Estructura del proyecto
 
 ```text
@@ -143,3 +154,11 @@ La configuracion editable vive en:
 ## Nota operativa
 
 Si faltan claves de providers, la app sigue arrancando y `POST /api/chat` responde `503` con un error claro. Eso permite desplegar la UI y validar estructura aun antes de terminar la configuracion del entorno.
+
+## Reglas conversacionales clave
+
+- Nombrar a `Gojo`, `Sukuna`, `Itadori`, `Megumi`, `Todo` o `Mahito` funciona con nombre o alias, sin necesidad de `@`.
+- Si el mensaje es claramente para un personaje, ese personaje queda como `targetSpeaker` y responde primero.
+- Si el usuario manda un follow-up corto como `¿y por que?`, `bien gracias` o `claro`, el foco sigue en el mismo personaje mientras no cambie la escena.
+- En prompts abiertos al grupo, la mesa puede cruzarse de forma natural sin perder control ni saturar el chat.
+- La app fuerza salida en español tanto en prompts como en mensajes visibles del producto.

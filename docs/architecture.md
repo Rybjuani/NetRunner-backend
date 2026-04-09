@@ -54,12 +54,16 @@ Define por personaje:
 Responsabilidades:
 
 - normalizar el request
-- leer menciones `@nombre`
+- leer nombres, aliases y menciones `@nombre`
+- detectar `targetSpeaker` cuando el usuario le habla a alguien de forma directa o natural
+- preservar continuidad de foco para follow-ups cortos del turno siguiente
 - excluir personajes silenciados
 - puntuar relevancia por keywords, menciones y rotacion
 - limitar la cantidad de participantes
 - evitar monopolio de una sola voz
 - construir la ronda secuencial
+
+Si existe `targetSpeaker`, ese personaje es el owner de la respuesta principal y abre la ronda. Los demas solo entran despues como secundarios.
 
 La salida del orquestador no es texto plano: devuelve una ronda con pasos, timings y orden final de agentes.
 
@@ -73,6 +77,8 @@ Construye el contexto de cada turno con:
 - respuestas ya emitidas en la ronda actual
 - personajes seleccionados
 - prioridad de menciones
+- ownership del turno (`target_owner`, `secondary`, `group`, etc.)
+- idioma de salida obligatorio en español
 - instrucciones de longitud y estilo
 
 ### 6. Providers
@@ -94,12 +100,13 @@ Incluye:
 2. El frontend manda `text`, `history` y `silencedAgents` a `POST /api/chat`.
 3. El backend normaliza el payload.
 4. El orquestador decide 1 a 3 participantes, salvo reglas especiales del prompt.
-5. Para cada participante:
+5. Si el usuario se dirige a un personaje concreto, ese personaje responde primero y los demas solo reaccionan despues.
+6. Para cada participante:
    - se construye un prompt especifico
    - se consulta el provider preferido
    - si falla, se recorre la cadena de fallback
-6. El backend devuelve una ronda con `steps`.
-7. El frontend reproduce la ronda con delays pseudo-humanos:
+7. El backend devuelve una ronda con `steps`.
+8. El frontend reproduce la ronda con delays pseudo-humanos:
    - thinking
    - typing
    - render del mensaje
@@ -109,6 +116,8 @@ Incluye:
 - El backend genera el contenido; el frontend controla el tempo visual.
 - Solo un personaje aparece escribiendo a la vez.
 - El chat no intenta simular paralelismo caotico.
+- El foco conversacional tiene owner cuando el usuario apunta a alguien.
+- La app responde en español por contrato de prompting y de superficie visible.
 - El historial es corto y controlado para evitar ruido y gasto de tokens.
 - No hay persistencia backend en esta etapa.
 

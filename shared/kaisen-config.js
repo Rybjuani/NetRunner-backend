@@ -13,7 +13,7 @@ export const STATUS_COPY = {
   active: "Listo",
   waiting: "Fila",
   thinking: "Escribe",
-  silenced: "Off",
+  silenced: "Sil.",
 };
 
 export const CHARACTER_ORDER = ["sukuna", "gojo", "itadori", "megumi", "todo", "mahito"];

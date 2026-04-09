@@ -197,6 +197,7 @@ export function buildAgentMessages({
   const userPrompt = [
     "Contexto fijo:",
     "Estas dentro de un chat grupal continuo con Sukuna, Gojo, Itadori, Megumi, Todo y Mahito.",
+    "Idioma obligatorio de salida: español.",
     `Interlocutor actual: ${character.name}.`,
     promptContext,
     `Referencias detectadas del usuario: ${referencedNames}.`,
@@ -233,6 +234,7 @@ export function buildAgentMessages({
     "Instrucciones de salida:",
     `- ${guidanceByPurpose[purpose]}`,
     "- Habla como este personaje, no como un asistente.",
+    "- Responde siempre en español. Si el usuario usa ingles o mezcla idiomas, tu salida sigue siendo en español.",
     responseRole === "target_owner"
       ? "- Responde la pregunta o comentario del usuario de frente; esa respuesta te pertenece a ti."
       : responseRole === "secondary"

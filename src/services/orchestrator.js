@@ -53,7 +53,17 @@ const THIRD_PERSON_REPORTING_PATTERNS = [
 ];
 const DIRECT_ADDRESS_AFTER_ALIAS_PATTERNS = [
   /^\s*[,:\-!?]/i,
-  /^\s+(?:contesta(?:me)?|contestame|responde(?:me)?|respondeme|decime|dime|explicale|explica|ayudame|ayúdame|mirame|mírame|escucha|calla(?:te)?|como|cómo|por|por qué|porque|te|vos|estas|estás|sigues|segu[ií]s|quiero|necesito|podrias|podrías|no)\b/i,
+  /^\s+(?:contesta(?:me)?|contestame|responde(?:me)?|respondeme|responda|conteste|decime|dime|diga|explicale|explica|explique|ayudame|ayúdame|mirame|mírame|escucha|hable|opine|piense|cuente|aclare|calla(?:te)?|como|cómo|por|por qué|porque|te|vos|estas|estás|sigues|segu[ií]s|quiero|necesito|podrias|podrías|no|si)\b/i,
+];
+const INDIRECT_ADDRESS_BEFORE_ALIAS_PATTERNS = [
+  /\b(?:preguntarle|preguntar|consultarle|consultar|decirle|decir|decile|dile|explicarle|explicar|explicale|hablarle|hablar|escribirle|escribir|responderle|responder|contestarle|contestar|pedirle|pedir)\s+a\s*$/i,
+  /\b(?:quiero|quisiera|necesito|me\s+gustaria|me\s+gustaría)\s+(?:escuchar|oir|oír)\s+a\s*$/i,
+  /\b(?:quiero|quisiera|necesito|me\s+gustaria|me\s+gustaría)\s+que\s*$/i,
+  /\b(?:que|qué)\s+(?:opina|piensa|diria|diría|haria|haría|dice)\s*$/i,
+  /\b(?:esto\s+va|va|viene|era)\s+para\s*$/i,
+];
+const TRAILING_VOCATIVE_PATTERNS = [
+  /(?:como|cómo|que|qué|por|por\s+que|por\s+qué|estas|estás|sigues|segu[ií]s|contestame|responde(?:me)?|decime|dime|explicame|expl[ií]came|me\s+dirias|me\s+dirías|opinas|piensas)[^.!?\n]{0,120}[,:\-]\s*$/i,
 ];
 const FOCUS_CONTINUATION_PATTERNS = [
   /^\s*[¿?]?\s*(?:y\s+)?por\s+qu[eé]\s*[?!.]*$/i,
@@ -238,6 +248,37 @@ function detectDirectTargetSpeaker(text, references) {
   return null;
 }
 
+function detectNaturalTargetSpeaker(text, references) {
+  for (const match of references.matches || []) {
+    const before = String(text || "").slice(Math.max(0, match.index - 120), match.index);
+    const after = String(text || "").slice(match.index + match.matchedText.length);
+
+    if (THIRD_PERSON_REPORTING_PATTERNS.some((pattern) => pattern.test(after))) {
+      continue;
+    }
+
+    const hasIndirectLeadIn = INDIRECT_ADDRESS_BEFORE_ALIAS_PATTERNS.some((pattern) => pattern.test(before));
+    const hasTrailingVocative = TRAILING_VOCATIVE_PATTERNS.some((pattern) => pattern.test(before)) && /^\s*[?!.]*\s*$/.test(after);
+    if (!hasIndirectLeadIn && !hasTrailingVocative) {
+      continue;
+    }
+
+    if (
+      DIRECT_ADDRESS_AFTER_ALIAS_PATTERNS.some((pattern) => pattern.test(after)) ||
+      /^\s*[?!.]*\s*$/.test(after) ||
+      /\?/.test(after) ||
+      references.all.length === 1
+    ) {
+      return {
+        characterId: match.characterId,
+        reason: "natural_address",
+      };
+    }
+  }
+
+  return null;
+}
+
 function isBroadGroupPrompt(text, references) {
   const lowered = String(text || "").toLowerCase();
   return (
@@ -320,11 +361,16 @@ function deriveFocusState(history) {
 
 function isSoftContinuationMessage(text, lastInteraction) {
   const trimmed = String(text || "").trim();
-  if (!trimmed || countWords(trimmed) > 12) {
+  const wordCount = countWords(trimmed);
+  if (!trimmed || wordCount > 18) {
     return false;
   }
 
   if (SOFT_CONTINUATION_PATTERNS.some((pattern) => pattern.test(trimmed))) {
+    return true;
+  }
+
+  if (lastInteraction?.directTargetSpeakerId) {
     return true;
   }
 
@@ -339,6 +385,11 @@ function detectTargetSpeaker({ text, references, history }) {
   const directTarget = detectDirectTargetSpeaker(text, references);
   if (directTarget) {
     return directTarget;
+  }
+
+  const naturalTarget = detectNaturalTargetSpeaker(text, references);
+  if (naturalTarget) {
+    return naturalTarget;
   }
 
   if (isBroadGroupPrompt(text, references)) {

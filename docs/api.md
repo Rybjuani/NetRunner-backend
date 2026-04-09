@@ -49,7 +49,7 @@ Genera una nueva ronda de conversacion.
 
 ```json
 {
-  "text": "@gojo y @megumi comparen dos estrategias para resolver esto",
+  "text": "Gojo y Megumi, comparen dos estrategias para resolver esto",
   "history": [
     {
       "role": "user",
@@ -70,7 +70,9 @@ Genera una nueva ronda de conversacion.
 - `text` es obligatorio.
 - `history` es opcional y se recorta del lado servidor.
 - `silencedAgents` es opcional.
-- Los personajes mencionados con `@nombre` tienen prioridad.
+- Los personajes pueden detectarse por nombre, alias o `@nombre`.
+- Si el usuario le habla claramente a un personaje, ese personaje queda como owner de la respuesta principal y responde primero.
+- Si el siguiente mensaje del usuario es un follow-up corto sin nuevo nombre, el backend puede mantener el mismo foco conversacional.
 
 ### Respuesta exitosa
 
@@ -78,7 +80,10 @@ Genera una nueva ronda de conversacion.
 {
   "roundId": "uuid",
   "selectedAgentIds": ["gojo", "megumi"],
-  "mentions": ["gojo", "megumi"],
+  "queueAgentIds": ["gojo", "megumi"],
+  "references": {
+    "all": ["gojo", "megumi"]
+  },
   "steps": [
     {
       "id": "uuid",
@@ -107,10 +112,12 @@ Genera una nueva ronda de conversacion.
 
 - no hay providers configurados
 - los providers fallaron o agotaron fallback
+- el personaje foco no pudo responder primero
 
 ### 404
 
 - endpoint inexistente
+- errores devueltos en español
 
 ## Endpoints eliminados
 

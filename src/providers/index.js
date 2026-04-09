@@ -41,7 +41,7 @@ async function callOpenAiCompatibleProvider({ providerName, endpoint, apiKey, mo
 
   if (!response.ok) {
     const details = (await parseJsonSafely(response)) || {};
-    throw createProviderError(`Provider ${providerName} returned ${response.status}.`, {
+    throw createProviderError(`El proveedor ${providerName} devolvio estado ${response.status}.`, {
       provider: providerName,
       status: response.status,
       details,
@@ -80,7 +80,7 @@ async function callOllamaProvider({ apiKey, model, messages, temperature }) {
 
   if (!response.ok) {
     const details = (await parseJsonSafely(response)) || {};
-    throw createProviderError(`Provider ollama returned ${response.status}.`, {
+    throw createProviderError(`El proveedor ollama devolvio estado ${response.status}.`, {
       provider: "ollama",
       status: response.status,
       details,
@@ -98,7 +98,7 @@ async function callOllamaProvider({ apiKey, model, messages, temperature }) {
 async function callProvider({ providerName, model, messages, temperature }) {
   const provider = runtime.providers[providerName];
   if (!provider?.apiKey) {
-    throw createProviderError(`Provider ${providerName} is not configured.`, {
+    throw createProviderError(`El proveedor ${providerName} no esta configurado.`, {
       provider: providerName,
       status: 503,
       code: "provider_not_configured",
@@ -150,7 +150,7 @@ export async function generateCharacterReply({ character, messages }) {
         });
 
         if (!text) {
-          throw createProviderError(`Provider ${providerName} returned an empty response.`, {
+          throw createProviderError(`El proveedor ${providerName} devolvio una respuesta vacia.`, {
             provider: providerName,
             status: 502,
             code: "empty_response",

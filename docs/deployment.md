@@ -38,6 +38,7 @@ npm start
 - Si faltan todas las credenciales, la app sigue arrancando.
 - En ese caso, `POST /api/chat` devuelve `503` con un mensaje claro.
 - `GET /api/health` sigue siendo util para validar deploy, roster y variables efectivas.
+- Los errores visibles del backend quedaron localizados en español.
 
 ## Recomendaciones
 
@@ -50,6 +51,7 @@ npm start
 ```bash
 npm install
 npm run dev
+npm run test:smoke
 ```
 
 ## Publicacion de assets

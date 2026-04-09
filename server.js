@@ -51,15 +51,15 @@ app.post("/api/chat", async (req, res, next) => {
 
 app.use((req, res) => {
   if (req.path.startsWith("/api/")) {
-    return res.status(404).json({ error: "Not found." });
+    return res.status(404).json({ error: "Ruta no encontrada." });
   }
 
-  return res.status(404).send("Not found.");
+  return res.status(404).send("Ruta no encontrada.");
 });
 
 app.use((error, _req, res, _next) => {
   const status = Number.isInteger(error?.statusCode) ? error.statusCode : 500;
-  const message = status === 503 || status < 500 ? error.message : "Internal server error.";
+  const message = status === 503 || status < 500 ? error.message : "Error interno del servidor.";
 
   if (status >= 500 && status !== 503) {
     console.error("[kaisen] unhandled error:", error);

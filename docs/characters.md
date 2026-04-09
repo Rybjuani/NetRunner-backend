@@ -4,6 +4,11 @@
 
 La primera version de Kaisen trabaja con seis personajes cerrados. Cada uno tiene personalidad, provider preferido, color y prompt propios.
 
+Regla global:
+
+- todos responden en español
+- todos apuntan a una fidelidad tonal fuerte al canon de Jujutsu Kaisen, sin copiar dialogos literales ni caer en parodia
+
 ## Resumen
 
 ### Sukuna
@@ -60,6 +65,12 @@ La primera version de Kaisen trabaja con seis personajes cerrados. Cada uno tien
   - [shared/kaisen-config.js](../shared/kaisen-config.js)
 - prompts, modelos, temperaturas, cooldowns y keywords:
   - [src/config/characters.js](../src/config/characters.js)
+
+## Dinamica conversacional
+
+- Si el usuario le habla a un personaje concreto, ese personaje responde primero.
+- Si luego otro personaje entra, lo hace como reaccion, cruce, burla, contradiccion o remate, no como destinatario principal.
+- Los nombres funcionan tanto por handle como por aliases naturales: `Gojo`, `Satoru`, `Itadori`, `Yuji`, `Megumi`, `Fushiguro`, `Todo`, `Aoi`, `Sukuna`, `Ryomen`.
 
 ## Ajustes recomendados si quieres tunearlos
 
